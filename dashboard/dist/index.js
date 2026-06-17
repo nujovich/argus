@@ -298,7 +298,8 @@
     llm_cost_recorded: { color: "var(--color-muted-foreground)", label: "Nemotron burn" }
   };
   function TierBadge({ tier, status }) {
-    const effective = status === "downgraded" ? "downgraded" : status === "killed" ? "killed" : (tier || "").toLowerCase();
+    const t = (tier || "").toLowerCase();
+    const effective = t === "reject" ? "reject" : status === "downgraded" ? "downgraded" : status === "killed" ? "killed" : t;
     const map = {
       ultra: { text: "\u26A1 ULTRA", bg: "linear-gradient(90deg, #7c3aed, #06b6d4)" },
       base: { text: "BASE", bg: "var(--color-muted)" },

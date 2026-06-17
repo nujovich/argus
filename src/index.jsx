@@ -438,11 +438,14 @@ const EVENT_TINT = {
 // ---------------------------------------------------------------------------
 
 function TierBadge({ tier, status }) {
-  // Allocation status (downgraded/killed) takes precedence over the
-  // original tier — that's the point of mid-flight throttle.
-  const effective = status === "downgraded" ? "downgraded"
+  // A rejected tier never ran — it stays REJECT regardless of the
+  // status field (we mark rejects as status='killed' in DB so they
+  // don't pollute the 'active' list, but visually they're rejects).
+  const t = (tier || "").toLowerCase();
+  const effective = t === "reject" ? "reject"
+                  : status === "downgraded" ? "downgraded"
                   : status === "killed"     ? "killed"
-                  : (tier || "").toLowerCase();
+                  : t;
   const map = {
     ultra:       { text: "⚡ ULTRA",       bg: "linear-gradient(90deg, #7c3aed, #06b6d4)" },
     base:        { text: "BASE",           bg: "var(--color-muted)" },
