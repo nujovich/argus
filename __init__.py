@@ -1,14 +1,13 @@
-"""Argus — Hermes plugin entrypoint (Phase 2 scaffold).
+"""Argus — Hermes plugin entrypoint.
 
-The real Capture + Enforcement hooks land in Phase 3. For now ``register``
-is a no-op so the plugin loads cleanly and the dashboard tab renders.
-
-See CLAUDE.md for the full design.
+Wires the Capture + Enforcement hook (CLAUDE.md §2, §6). The hook itself
+lives in hook.py; this module is just the registration shim Hermes calls.
 """
 
 from __future__ import annotations
 
+import hook  # noqa: F401  (plugin dir is on sys.path at runtime)
 
-def register(ctx) -> None:  # noqa: ARG001 — ctx unused until Phase 3
-    """Plugin registration hook. Intentionally a no-op in the scaffold."""
-    return None
+
+def register(ctx) -> None:
+    ctx.register_hook("pre_tool_call", hook.on_pre_tool_call)

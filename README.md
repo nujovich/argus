@@ -6,9 +6,30 @@ Horizontal financial control plane for money-spending Hermes agents.
 Meters every dollar in/out per job, tracks live P&L, and gates Stripe
 spends through a human-in-the-loop approval flow.
 
-**Status:** Phase 2 scaffold — empty plugin that renders an Argus tab in
-the Hermes dashboard and proves front-end ↔ back-end wiring. No ledger,
-no Stripe, no policy yet. Full design in [`CLAUDE.md`](./CLAUDE.md).
+**Status:** Phase 3 — ledger, pure policy, `pre_tool_call` Capture +
+Enforcement hook, and the dashboard UI (P&L, approval queue, audit
+trail) are all live. Stripe Skills wiring + the three-job demo script
+land in Phase 4. Full design in [`CLAUDE.md`](./CLAUDE.md).
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest
+```
+
+## Demo without an agent
+
+The dashboard hits the same code path the hook does, via
+`POST /api/plugins/argus/sim/spend`. Useful for development:
+
+```bash
+curl -X POST http://127.0.0.1:9119/api/plugins/argus/sim/spend \
+  -H 'content-type: application/json' \
+  -d '{"job_id":"demo","cost_center_id":"default","projected_usd":5.0}'
+```
+
+A pending approval will appear in the dashboard — click Approve or Reject.
 
 ## Install (dev)
 
@@ -34,7 +55,12 @@ it shows a "scaffold OK" card and a badge fed by
 argus/
 ├── CLAUDE.md           # design doc — single source of truth
 ├── plugin.yaml         # Hermes plugin manifest (Python side)
-├── __init__.py         # register(ctx) — no-op in scaffold
+├── __init__.py         # register(ctx) → wires pre_tool_call hook
+├── hook.py             # Capture + Enforcement (synchronous hold)
+├── policy.py           # pure decide() function
+├── db.py               # ledger + approvals + audit (SQLite WAL)
+├── config.py           # paths and cost-center loading
+├── cost_centers.yaml.example
 ├── dashboard/
 │   ├── manifest.json   # dashboard plugin manifest
 │   ├── plugin_api.py   # FastAPI router → /api/plugins/argus/
@@ -43,5 +69,8 @@ argus/
 │   ├── index.jsx
 │   └── react-shim.js
 ├── build.mjs           # esbuild → dashboard/dist/index.js
-└── package.json
+├── package.json
+├── requirements.txt
+├── requirements-dev.txt
+└── tests/
 ```
