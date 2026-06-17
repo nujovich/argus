@@ -18,7 +18,7 @@ PRODUCT_ID=$(stripe products create \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
 echo "  product: $PRODUCT_ID"
 
-echo "▶ Creating $15 price…"
+echo "▶ Creating \$15 price…"
 PRICE_ID=$(stripe prices create \
   -d product="$PRODUCT_ID" \
   -d unit_amount=1500 \
