@@ -170,12 +170,21 @@ live Argus API. It walks the operator through:
 
 Final P&L on the recorded take:
 
+![Argus dashboard — final P&L of the three-job demo](docs/pnl-final.png)
+
 | Job              | Revenue | LLM (Nemotron) | External | P&L |
 |---|---:|---:|---:|---:|
 | job-a-api        | $25.00 | $0.01 | $8.10 | **+$16.89** |
 | job-b-saas       | $120.00 | $0.00 | $79.00 | **+$41.00** |
 | job-c-services   | $9.00 | $0.00 | $3.00 | **+$6.00** |
 | **Total**        | **$154.00** | **$0.01** | **$90.10** | **+$63.89** |
+
+The `$0.01` in the LLM column for `job-a-api` is **Nemotron 3 Ultra 550B
+pricing**, surfaced live from `hermes-telemetry` via Argus's read-only
+`ATTACH`. The audit trail card under the P&L records the full chain:
+`spend_evaluated → approval_requested → approval_approved → spend_resumed`
+for the approves, and the analogous `_rejected` chain for Job C's
+first attempt.
 
 Recipe in `DEMO.md`. Reproduces deterministically on any machine with
 Hermes 0.16, a Nemotron / NemoClaw key, and ~10 minutes.
