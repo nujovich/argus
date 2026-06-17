@@ -402,6 +402,8 @@ function ApprovalsSection() {
 // Audit trail — color-coded badges, slide-in on new
 // ---------------------------------------------------------------------------
 
+// (status above is the compute allocation's lifecycle status,
+// not the policy verdict; see db.compute_allocations.status)
 const EVENT_TINT = {
   revenue_received:           { color: "var(--color-success, #16a34a)", label: "REVENUE" },
   spend_evaluated:            { color: "var(--color-muted-foreground)", label: "evaluated" },
@@ -435,15 +437,20 @@ const EVENT_TINT = {
 // Fleet view — Argus allocating compute as capital, per-job
 // ---------------------------------------------------------------------------
 
-function TierBadge({ tier }) {
-  const t = (tier || "").toLowerCase();
+function TierBadge({ tier, status }) {
+  // Allocation status (downgraded/killed) takes precedence over the
+  // original tier — that's the point of mid-flight throttle.
+  const effective = status === "downgraded" ? "downgraded"
+                  : status === "killed"     ? "killed"
+                  : (tier || "").toLowerCase();
   const map = {
-    ultra:       { text: "⚡ ULTRA",   bg: "linear-gradient(90deg, #7c3aed, #06b6d4)" },
-    base:        { text: "BASE",       bg: "var(--color-muted)" },
-    reject:      { text: "⛔ REJECT",  bg: "var(--color-destructive)" },
-    downgraded:  { text: "⚠ DOWNGRADED", bg: "var(--color-warning, #f59e0b)" },
+    ultra:       { text: "⚡ ULTRA",       bg: "linear-gradient(90deg, #7c3aed, #06b6d4)" },
+    base:        { text: "BASE",           bg: "var(--color-muted)" },
+    reject:      { text: "⛔ REJECT",      bg: "var(--color-destructive)" },
+    downgraded:  { text: "⚠ DOWNGRADED",   bg: "var(--color-warning, #f59e0b)" },
+    killed:      { text: "🛑 KILLED",      bg: "var(--color-destructive)" },
   };
-  const m = map[t] || { text: tier || "—", bg: "var(--color-muted)" };
+  const m = map[effective] || { text: tier || "—", bg: "var(--color-muted)" };
   return (
     <span style={{
       background: m.bg, color: "white", padding: "0.15rem 0.6rem",
@@ -539,7 +546,7 @@ function ComputeFleet({ fleet }) {
                       {it.cost_center_id} · {it.model || "—"}
                     </div>
                   </div>
-                  <TierBadge tier={it.tier} />
+                  <TierBadge tier={it.tier} status={it.status} />
                   {it.tier === "reject" ? (
                     <span style={{ color: "var(--color-destructive)", fontSize: "0.85em" }}>
                       Not authorized — margin would be negative

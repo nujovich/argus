@@ -297,15 +297,16 @@
     compute_integrity_violation: { color: "var(--color-destructive)", label: "\u{1F6A8} INTEGRITY" },
     llm_cost_recorded: { color: "var(--color-muted-foreground)", label: "Nemotron burn" }
   };
-  function TierBadge({ tier }) {
-    const t = (tier || "").toLowerCase();
+  function TierBadge({ tier, status }) {
+    const effective = status === "downgraded" ? "downgraded" : status === "killed" ? "killed" : (tier || "").toLowerCase();
     const map = {
       ultra: { text: "\u26A1 ULTRA", bg: "linear-gradient(90deg, #7c3aed, #06b6d4)" },
       base: { text: "BASE", bg: "var(--color-muted)" },
       reject: { text: "\u26D4 REJECT", bg: "var(--color-destructive)" },
-      downgraded: { text: "\u26A0 DOWNGRADED", bg: "var(--color-warning, #f59e0b)" }
+      downgraded: { text: "\u26A0 DOWNGRADED", bg: "var(--color-warning, #f59e0b)" },
+      killed: { text: "\u{1F6D1} KILLED", bg: "var(--color-destructive)" }
     };
-    const m = map[t] || { text: tier || "\u2014", bg: "var(--color-muted)" };
+    const m = map[effective] || { text: tier || "\u2014", bg: "var(--color-muted)" };
     return /* @__PURE__ */ React2.createElement("span", { style: {
       background: m.bg,
       color: "white",
@@ -364,7 +365,7 @@
           }
         },
         /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600 } }, it.job_id), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: "0.75em", color: "var(--color-muted-foreground)", fontFamily: "monospace" } }, it.cost_center_id, " \xB7 ", it.model || "\u2014")),
-        /* @__PURE__ */ React2.createElement(TierBadge, { tier: it.tier }),
+        /* @__PURE__ */ React2.createElement(TierBadge, { tier: it.tier, status: it.status }),
         it.tier === "reject" ? /* @__PURE__ */ React2.createElement("span", { style: { color: "var(--color-destructive)", fontSize: "0.85em" } }, "Not authorized \u2014 margin would be negative") : /* @__PURE__ */ React2.createElement(BurnBar, { ratio: it.burn_ratio, budget: it.compute_budget_usd, burn: it.actual_burn_usd }),
         /* @__PURE__ */ React2.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: "0.75em", color: "var(--color-muted-foreground)" } }, "margin"), /* @__PURE__ */ React2.createElement("div", { style: {
           fontWeight: 700,

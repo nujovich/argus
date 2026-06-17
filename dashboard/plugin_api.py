@@ -291,7 +291,11 @@ async def admin_llm_cost(body: LlmCostBody) -> dict:
     """Admin endpoint used by demo drivers to simulate Nemotron consumption
     without having to run a full Hermes chat. In production this row is
     automatically derived by the read-only ATTACH to hermes-telemetry —
-    this endpoint is only for the deterministic demo path."""
+    this endpoint is only for the deterministic demo path. Each insert
+    also runs the throttle check so mid-flight downgrades fire when the
+    burn ratio crosses the threshold."""
+    import hook as _hook
+
     row_id = db.insert_ledger_row(
         job_id=body.job_id,
         kind="llm_cost",
@@ -304,7 +308,31 @@ async def admin_llm_cost(body: LlmCostBody) -> dict:
         "system", "llm_cost_recorded",
         {"job_id": body.job_id, "amount_usd": body.amount_usd, "ref": body.ref},
     )
-    return {"recorded": "llm_cost", "id": row_id}
+    throttle = _hook.check_and_apply_throttle(body.job_id)
+    return {"recorded": "llm_cost", "id": row_id, "throttle": throttle}
+
+
+@router.get("/jobs/{job_id}/status")
+async def get_job_status(job_id: str) -> dict:
+    """The cooperative throttle endpoint. An agent polls this each turn
+    while running an LLM-heavy job. Argus returns the recommended action:
+
+      - ``active``: continue on the originally-authorized model.
+      - ``downgraded``: switch to the base model for the rest of the
+        job (Argus already logged the downgrade event).
+      - ``killed``: stop the job entirely; current_margin is in the red.
+
+    Note: real runtime enforcement (Argus forcing the model swap mid-call)
+    requires Hermes to expose a model_override hook — see FUTURE.md
+    Tier 1. Today the agent has to cooperate."""
+    import hook as _hook
+    alloc = db.get_latest_active_allocation(job_id)
+    throttle = _hook.check_and_apply_throttle(job_id)
+    return {
+        "job_id": job_id,
+        "allocation": alloc,
+        **throttle,
+    }
 
 
 @router.get("/compute/fleet")
@@ -561,8 +589,57 @@ async def run_ai_services_firm_demo() -> dict:
         if b_alloc:
             db.set_actual_model(b_alloc["id"], "nvidia/nemotron-3-base-9b")
 
+        # ---- Job D: mid-flight throttle scenario ----
+        # Authorized Ultra with a tight $5 budget, then the agent's
+        # research runs hotter than expected. Halfway through Argus
+        # sees the burn ratio breach and downgrades.
+        d = _hook.process_compute_request_for_api(
+            job_id="research-runaway-007",
+            cost_center_id="ai_research",
+            expected_revenue_usd=120.0,
+            projected_burn_usd=5.0,
+            ref="exploratory_research",
+            task_id="dashboard-demo-d",
+        )
+        outcomes.append({"job": "research-runaway-007 (allocated)", "compute": d})
+        d_alloc = db.get_latest_active_allocation("research-runaway-007")
+        if d_alloc:
+            db.set_actual_model(d_alloc["id"], "nvidia/nemotron-3-ultra-550b-a55b")
+        # First chunk of inference — within budget, no throttle.
+        db.insert_ledger_row(
+            job_id="research-runaway-007", kind="llm_cost",
+            amount_usd=2.50, source="sim_llm",
+            ref="nemotron_ultra_chunk_1",
+        )
+        db.log_audit("system", "llm_cost_recorded",
+                     {"job_id": "research-runaway-007", "amount_usd": 2.50,
+                      "ref": "nemotron_ultra_chunk_1"})
+        t1 = _hook.check_and_apply_throttle("research-runaway-007")
+        outcomes.append({"job": "research-runaway-007 (chunk 1)", "throttle": t1})
+        # Second chunk pushes the ratio past 0.7 → DOWNGRADE.
+        db.insert_ledger_row(
+            job_id="research-runaway-007", kind="llm_cost",
+            amount_usd=1.80, source="sim_llm",
+            ref="nemotron_ultra_chunk_2",
+        )
+        db.log_audit("system", "llm_cost_recorded",
+                     {"job_id": "research-runaway-007", "amount_usd": 1.80,
+                      "ref": "nemotron_ultra_chunk_2"})
+        t2 = _hook.check_and_apply_throttle("research-runaway-007")
+        outcomes.append({"job": "research-runaway-007 (chunk 2 — throttle)", "throttle": t2})
+        # Revenue lands so margin is still positive.
+        db.insert_ledger_row(
+            job_id="research-runaway-007", kind="revenue",
+            amount_usd=120.0, source="stripe",
+            ref="pi_sim_research_runaway",
+        )
+        db.log_audit("stripe", "revenue_received",
+                     {"job_id": "research-runaway-007", "amount_usd": 120.0})
+
         # Now run the integrity sweep. Job A will flag as silent fallback;
-        # Job B is clean; Job C never had an active allocation (rejected).
+        # Job B is clean; Job C never had an active allocation (rejected);
+        # Job D's actual model matches authorized (the downgrade was an
+        # economic decision, not a silent substitution).
         violations = db.run_compute_integrity_sweep()
         outcomes.append({"integrity_violations": violations})
 

@@ -368,6 +368,74 @@ def _build_compute_snapshot(
     )
 
 
+DOWNGRADE_BURN_RATIO = 0.7
+KILL_BURN_RATIO = 1.2
+
+
+def check_and_apply_throttle(job_id: str) -> Dict[str, Any]:
+    """Inspect a job's current burn ratio and apply throttle decisions
+    cooperatively: if burn breaches the downgrade threshold while the
+    job is on Ultra, mark the allocation as 'downgraded' and emit an
+    audit row. The agent reads /jobs/{job_id}/status next turn and
+    switches model voluntarily. True runtime enforcement requires
+    Hermes to expose a model_override hook (FUTURE.md Tier 1)."""
+    alloc = db.get_latest_active_allocation(job_id)
+    if not alloc or alloc["status"] != "active":
+        return {"status": alloc["status"] if alloc else "none", "burn_ratio": 0.0}
+
+    budget = float(alloc.get("compute_budget_usd") or 0.0)
+    burn = db.get_job_burn(job_id)
+    if budget <= 0:
+        return {"status": "active", "burn_ratio": 0.0}
+    ratio = burn / budget
+
+    # Look up the base model so the agent knows what to switch to.
+    budgets = _cfg.load_budgets()
+    budget_cfg = budgets.get(alloc["cost_center_id"]) or budgets.get("default")
+    base_model = budget_cfg.base_model if (budget_cfg and budget_cfg.base_model) else "base"
+
+    if ratio >= KILL_BURN_RATIO:
+        db.update_allocation_status(
+            alloc["id"], "killed",
+            downgrade_reason=f"burn_ratio={ratio:.2f}_kill",
+        )
+        db.log_audit(
+            "system", "compute_tier_killed",
+            {
+                "job_id": job_id, "allocation_id": alloc["id"],
+                "burn_ratio": ratio, "burn_usd": burn, "budget_usd": budget,
+                "from_tier": alloc["tier"],
+            },
+        )
+        return {
+            "status": "killed", "burn_ratio": ratio,
+            "burn_usd": burn, "budget_usd": budget,
+        }
+
+    if ratio >= DOWNGRADE_BURN_RATIO and alloc["tier"] == "ultra":
+        db.update_allocation_status(
+            alloc["id"], "downgraded",
+            downgrade_reason=f"burn_ratio={ratio:.2f}_breach",
+        )
+        db.log_audit(
+            "system", "compute_tier_downgraded",
+            {
+                "job_id": job_id, "allocation_id": alloc["id"],
+                "burn_ratio": ratio, "burn_usd": burn, "budget_usd": budget,
+                "from_tier": "ultra", "to_tier": "base",
+                "from_model": alloc["model"], "to_model": base_model,
+            },
+        )
+        return {
+            "status": "downgraded", "burn_ratio": ratio,
+            "burn_usd": burn, "budget_usd": budget,
+            "from_model": alloc["model"], "to_model": base_model,
+        }
+
+    return {"status": "active", "burn_ratio": ratio,
+            "burn_usd": burn, "budget_usd": budget}
+
+
 def process_compute_request_for_api(
     *,
     job_id: str,
