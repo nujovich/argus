@@ -203,12 +203,15 @@ class SimSpendBody(BaseModel):
     cost_center_id: str = "default"
     projected_usd: float
     ref: Optional[str] = None
+    session_id: Optional[str] = None   # agent's real task_id when called from a live session
 
 
 @router.post("/sim/spend")
 async def sim_spend(body: SimSpendBody) -> dict:
-    """Drive the gating pipeline end-to-end from the dashboard, no agent
-    required. Useful for the demo and for local development."""
+    """Drive the gating pipeline end-to-end. Used by the deterministic
+    demo driver AND by live Hermes agents that hit this endpoint via the
+    terminal/HTTP tool — the agent's own task_id should be passed as
+    ``session_id`` so the ledger row joins correctly against telemetry."""
     import hook as _hook  # local import: keep startup light
 
     args = {
@@ -217,11 +220,10 @@ async def sim_spend(body: SimSpendBody) -> dict:
         "projected_usd": body.projected_usd,
         "ref": body.ref,
     }
-    # Run the same code path the agent would hit. This blocks if approval is
-    # required — keep the call async-aware by offloading to a thread.
+    task_id = body.session_id or "sim"
     import anyio
 
     result = await anyio.to_thread.run_sync(
-        lambda: _hook.on_pre_tool_call("argus_request_spend", args, "sim", )
+        lambda: _hook.on_pre_tool_call("argus_request_spend", args, task_id)
     )
     return {"result": result or {"action": "allow"}}

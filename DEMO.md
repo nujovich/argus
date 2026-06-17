@@ -177,25 +177,66 @@ gating path is identical.
 
 ---
 
-## 5. Optional: drive the demo with a live Hermes agent
+## 5. Live Hermes agent driving the demo
 
-The shipped script in §2 is deterministic — perfect for a recorded
-video where you don't want LLM non-determinism. To run the demo with a
-real Hermes agent making decisions instead:
+This is the variant the screencast leans into for the wow moment. A
+real Hermes session running on Nemotron 3 Ultra calls Argus's gating
+endpoint for every spend it wants to make. The agent receives blocks
+as errors and self-corrects in real time.
 
-1. Configure a chat profile that has access to a `request_spend(job_id,
-   projected_usd, cost_center_id, ref)` skill and the relevant Stripe
-   skill(s). The skill must call `argus_request_spend(...)` first; the
-   hook will gate it.
-2. Prompt the agent with a goal like *"buy $5 of NIM credits for job
-   X"*. The pre_tool_call hook intercepts the spend just like in the
-   script and waits for the dashboard.
-3. Approve or reject — the agent resumes (or self-corrects on block)
-   in real time.
+### 5.1 Install the `argus-request-spend` skill
 
-Trade-off: less reproducible, more impressive. If your screencast
-budget allows, do both — script for the bulk, one live agent moment
-for the wow.
+The skill teaches the agent the contract: *before any money spend,
+hit Argus.* It lives in the repo at `skills/argus-request-spend/`.
+
+```bash
+# Symlink (so edits to the skill source are live in the agent)
+mkdir -p ~/.hermes/skills
+ln -sf ~/argus/skills/argus-request-spend ~/.hermes/skills/argus-request-spend
+
+# Verify Hermes sees it
+hermes skills list 2>&1 | grep argus
+# → argus-request-spend  | productivity | local | local | enabled
+```
+
+### 5.2 Set the token so the agent's curl reaches Argus
+
+The agent uses the same token the dashboard does:
+
+```bash
+export HERMES_DASHBOARD_SESSION_TOKEN=argus-demo
+```
+
+(The skill reads this env var in its example curl. If you used a
+different token, adjust the SKILL.md or set this matching value.)
+
+### 5.3 Run the agent with a budget prompt
+
+```bash
+hermes -z "You have a \$50 budget and three tasks for cost centers
+api_calls, saas, services. Use argus-request-spend for every spend.
+Job A (api_calls): make 5 micro API calls at \$0.02 each, then a \$8
+batch backfill. Job B (saas): provision a Postgres tier — try \$79
+first. Job C (services): buy \$7 of NVIDIA NIM credits, then if
+blocked retry with \$3. Report total spent and remaining budget."
+```
+
+The agent reads the skill, recognises the pattern, and runs each spend
+through Argus's `/sim/spend`. The dashboard's Approval queue lights up
+exactly the same as the deterministic demo — but now the spends come
+from a live Nemotron-driven decision loop, with the agent's task_id
+threaded through so LLM cost joins correctly in the P&L.
+
+### 5.4 What's different from the deterministic script
+
+- The agent's **task_id** is its real Hermes session_id, so
+  `hermes-telemetry`'s Nemotron token cost auto-joins into the LLM
+  column for the relevant jobs.
+- The agent **reads the rejection messages** and chooses what to do
+  next. The deterministic script's "first try $7, get rejected, retry
+  $3" is encoded; the live agent decides that in real time.
+- Less reproducible — the agent may pick slightly different amounts
+  or refs. That's the point: a real agent making real decisions.
 
 ---
 
