@@ -199,6 +199,64 @@ for the wow.
 
 ---
 
+## 5b. Optional: drive revenue from real Stripe (TEST mode)
+
+Same payload shape as the demo sim, but emitted by Stripe itself. Useful
+when you want to show the judges that the wiring is real, not a hand-
+written JSON.
+
+### Install + login (one-time)
+
+```bash
+# Install Stripe CLI (Linux/WSL): https://docs.stripe.com/stripe-cli
+curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public \
+  | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" \
+  | sudo tee /etc/apt/sources.list.d/stripe.list
+sudo apt update && sudo apt install stripe
+
+# Sign in to your Stripe account (TEST mode is the default)
+stripe login
+```
+
+### Forward webhooks to Argus (terminal #3)
+
+```bash
+stripe listen \
+  --forward-to http://127.0.0.1:9119/api/plugins/argus/webhooks/stripe \
+  --skip-verify    # we don't verify the signature in v1
+```
+
+Leave this running. Stripe CLI is now a tunnel; any event in your TEST
+account hits Argus.
+
+### Trigger a real payment_intent.succeeded
+
+```bash
+# Attach the demo's job_id via metadata so Argus's ledger ties revenue
+# to the right job in the P&L view
+stripe trigger payment_intent.succeeded \
+  --add payment_intent:metadata.job_id=job-b-saas \
+  --add payment_intent:amount=12000
+```
+
+Refresh the Argus tab. The audit trail should show a fresh
+`revenue_received` row for `job-b-saas` of `$120.00`, and the P&L
+column updates. The `ref` field in the ledger holds the real
+`pi_...` id — clickable in your Stripe dashboard.
+
+### Trigger a refund
+
+```bash
+stripe trigger charge.refunded \
+  --add charge:metadata.job_id=job-b-saas \
+  --add charge:amount_refunded=5000
+```
+
+Argus writes a `-$50.00` `external_spend` row → P&L recalculates.
+
+---
+
 ## 6. Reset between takes
 
 ```bash

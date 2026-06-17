@@ -115,30 +115,78 @@ class StripeEvent(BaseModel):
     data: dict
 
 
+def _extract_stripe_fields(evt_type: str, data: dict) -> tuple[str, float, Optional[str]]:
+    """Pull job_id / amount_usd / ref out of a Stripe webhook payload.
+
+    Real Stripe webhooks nest the object under ``data.object`` and use cents
+    + ``metadata`` for custom fields. The sim payloads we ship with the demo
+    use a flatter shape. This function accepts both so the same endpoint
+    serves curl-driven demos and ``stripe trigger`` / real webhooks.
+    """
+    obj = data.get("object") if isinstance(data.get("object"), dict) else data
+
+    # job_id: prefer metadata.job_id (the convention for real Stripe), fall
+    # back to a top-level job_id (sim payload), default to "unknown".
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    job_id = str(
+        metadata.get("job_id")
+        or obj.get("job_id")
+        or data.get("job_id")
+        or "unknown"
+    )
+
+    # amount: real Stripe sends cents as int; sim sends dollars as float.
+    # For refunds the relevant field is amount_refunded.
+    if evt_type == "charge.refunded":
+        amount_field = obj.get("amount_refunded") or obj.get("amount_usd") or 0
+    else:
+        amount_field = (
+            obj.get("amount_usd")
+            or data.get("amount_usd")
+            or obj.get("amount")
+            or data.get("amount")
+            or 0
+        )
+    # Stripe convention: integers are cents; floats stay dollars.
+    if isinstance(amount_field, int) and amount_field >= 100:
+        amount = amount_field / 100.0
+    else:
+        amount = float(amount_field)
+
+    ref = obj.get("id") or data.get("id") or obj.get("ref") or data.get("ref")
+    return job_id, amount, ref
+
+
 @router.post("/webhooks/stripe")
 async def stripe_webhook(evt: StripeEvent) -> dict:
-    """Minimal TEST-mode webhook. Recognised events:
+    """Stripe webhook receiver. Accepts both real Stripe envelopes
+    (``data.object`` nested, cents) and the flatter sim payloads the demo
+    script uses. Recognised events:
 
-    - payment_intent.succeeded → revenue row
-    - charge.refunded          → negative external_spend row
+    - ``payment_intent.succeeded`` → revenue row
+    - ``charge.refunded``          → negative external_spend row
     """
-    payload = evt.data or {}
-    job_id = str(payload.get("job_id") or payload.get("metadata", {}).get("job_id") or "unknown")
-    amount = float(payload.get("amount_usd") or payload.get("amount") or 0.0)
-    ref = payload.get("id") or payload.get("ref")
+    job_id, amount, ref = _extract_stripe_fields(evt.type, evt.data or {})
 
     if evt.type == "payment_intent.succeeded":
         row_id = db.insert_ledger_row(
             job_id=job_id, kind="revenue", amount_usd=amount, source="stripe", ref=ref
         )
-        db.log_audit("stripe", "revenue_received", {"job_id": job_id, "amount_usd": amount, "ref": ref})
+        db.log_audit(
+            "stripe", "revenue_received",
+            {"job_id": job_id, "amount_usd": amount, "ref": ref},
+        )
         return {"recorded": "revenue", "id": row_id}
 
     if evt.type == "charge.refunded":
         row_id = db.insert_ledger_row(
-            job_id=job_id, kind="external_spend", amount_usd=-amount, source="stripe", ref=ref
+            job_id=job_id, kind="external_spend", amount_usd=-amount,
+            source="stripe", ref=ref,
         )
-        db.log_audit("stripe", "refund_recorded", {"job_id": job_id, "amount_usd": amount, "ref": ref})
+        db.log_audit(
+            "stripe", "refund_recorded",
+            {"job_id": job_id, "amount_usd": amount, "ref": ref},
+        )
         return {"recorded": "refund", "id": row_id}
 
     db.log_audit("stripe", "webhook_ignored", {"type": evt.type})
