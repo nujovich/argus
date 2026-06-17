@@ -39,7 +39,9 @@ def _get_conn() -> sqlite3.Connection:
     if conn is not None:
         return conn
     path = _get_db_path()
-    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
+    conn = sqlite3.connect(
+        str(path), isolation_level=None, check_same_thread=False, uri=True
+    )
     conn.row_factory = sqlite3.Row
     # busy_timeout must precede journal_mode=WAL — switching a contested fresh
     # DB to WAL needs a brief lock that the default 0-ms timeout won't wait for.
@@ -279,16 +281,27 @@ def get_pnl_per_job() -> List[Dict[str, Any]]:
     """
     conn = _get_conn()
     tele_path = _cfg.telemetry_db_path()
-    have_tele = tele_path.exists()
-    try:
-        if have_tele:
+    attached = False
+    if tele_path.exists():
+        try:
             conn.execute(
                 "ATTACH DATABASE ? AS telemetry",
                 (f"file:{tele_path}?mode=ro",),
             )
-        rows = conn.execute(_PNL_SQL_WITH_TELE if have_tele else _PNL_SQL).fetchall()
+            attached = True
+        except sqlite3.Error:
+            # Telemetry DB exists but couldn't be attached (locked, wrong
+            # schema, URI not supported by this sqlite build). Fall back to
+            # the no-telemetry query — better to show $0 LLM cost than 500.
+            attached = False
+    try:
+        rows = conn.execute(_PNL_SQL_WITH_TELE if attached else _PNL_SQL).fetchall()
+    except sqlite3.Error:
+        # If the attached schema doesn't have `runs.cost_usd` / `session_id`,
+        # the WITH_TELE query throws. Retry without telemetry.
+        rows = conn.execute(_PNL_SQL).fetchall()
     finally:
-        if have_tele:
+        if attached:
             try:
                 conn.execute("DETACH DATABASE telemetry")
             except sqlite3.OperationalError:
