@@ -89,6 +89,32 @@ for one commission. The script pauses at each approval beat and
 prompts you to click **Approve** / **Reject** in the dashboard. Sample
 decisions are listed inline so you know what each pause is testing.
 
+### Option A+ — same driver, but with REAL Stripe Checkout for revenue
+
+For the screencast moment "the customer actually pays," swap the
+simulated webhook for a real Stripe Checkout Payment Link:
+
+```bash
+# 1. One-time setup: creates product + price + payment link in test mode
+bash examples/mermelada-studio/setup_stripe_checkout.sh
+# → prints a URL like https://buy.stripe.com/test_xxxxxxxx
+
+# 2. Run stripe listen in another terminal so the webhook lands on Argus
+stripe listen --forward-to http://127.0.0.1:9119/api/plugins/argus/webhooks/stripe \
+  --skip-verify -H "Authorization: Bearer argus-demo"
+
+# 3. Run the demo in real-checkout mode
+export ARGUS_USE_REAL_STRIPE_LINK=1
+export ARGUS_STRIPE_LINK='https://buy.stripe.com/test_xxxxxxxx'
+python3 examples/mermelada-studio/mermelada_demo.py
+```
+
+Stage 1 now pauses with the link printed. Pay it in the browser with
+test card `4242 4242 4242 4242` (any CVC, any future date). Stripe
+fires the webhook, Argus's ledger records the real `pi_...` ref, and
+the dashboard P&L shows the same `$15` revenue — but it's now a real
+PaymentIntent you can click through to in your Stripe TEST dashboard.
+
 ### Option B — live agent (the wow moment)
 
 A real Hermes session on Nemotron 3 Ultra running with the

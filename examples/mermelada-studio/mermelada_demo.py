@@ -111,9 +111,34 @@ JOB = "mermelada-commission-001"
 
 def stage_1_customer_pays() -> None:
     banner("STAGE 1 — Customer pays $15 for a 3-slide carousel")
-    step("Stripe Checkout webhook fires → revenue lands in Argus's ledger")
-    revenue(JOB, 15.0, "pi_mermelada_commission_001")
-    result("revenue", "Stripe webhook  +$15.00")
+    if os.environ.get("ARGUS_USE_REAL_STRIPE_LINK"):
+        step("Real Stripe Checkout active — pay the Payment Link with card 4242 ...")
+        print(f"   ⏸  Pay this link in your browser: {os.environ.get('ARGUS_STRIPE_LINK', '<set ARGUS_STRIPE_LINK>')}")
+        print("      Use test card: 4242 4242 4242 4242  any CVC  any future date")
+        input("   Press Enter once Stripe shows the payment succeeded… ")
+        # The stripe listen forwarder writes the revenue row when the
+        # real payment_intent.succeeded webhook lands. Nothing more to
+        # do here.
+        result("revenue", "Real Stripe webhook → revenue row written")
+    else:
+        step("Sim mode: simulating Stripe Checkout webhook → revenue lands in Argus's ledger")
+        revenue(JOB, 15.0, "pi_mermelada_commission_001")
+        result("revenue", "Sim webhook  +$15.00  (set ARGUS_USE_REAL_STRIPE_LINK=1 for live mode)")
+
+
+def _action_line(label: str, amount: float, rec: Dict[str, Any]) -> None:
+    """Pretty-print the outcome of a /sim/spend call, including the
+    auth-token preview when one was issued. Surfaces defense-in-depth
+    visibly during the screencast."""
+    action = rec.get("action", "?")
+    tok = rec.get("_token_preview", "")
+    extra = f"  🔑 token={tok}" if tok else ""
+    glyph = "allow" if action == "allow" else "block"
+    if action == "allow":
+        result(glyph, f"{label}  ${amount:.2f}  → ALLOW{extra}")
+    else:
+        msg = rec.get("message", "")
+        result(glyph, f"{label}  ${amount:.2f}  → {msg}")
 
 
 def stage_2_image_generation() -> None:
@@ -121,22 +146,13 @@ def stage_2_image_generation() -> None:
     step("3 background images @ $0.30 each — micro auto-approves")
     for i in range(3):
         r = spend(JOB, "image_gen", 0.30, ref=f"bg_image_{i+1}")
-        rec_ = r.get("result", {})
-        action = rec_.get("action", "?")
-        tok = rec_.get("_token_preview", "")
-        result("allow" if action == "allow" else "block",
-               f"bg_image_{i+1}  $0.30  → {action}")
+        _action_line(f"bg_image_{i+1}", 0.30, r.get("result", {}))
         time.sleep(0.15)
 
     step("Hero illustration $2.00 — over the auto threshold of $0.50")
     print("   ⏸  Dashboard has a pending MANAGER approval. Click Approve.")
     r = spend(JOB, "image_gen", 2.0, ref="hero_illustration")
-    action = r.get("result", {}).get("action")
-    if action == "allow":
-        result("allow", "hero_illustration  $2.00  → approved by human")
-    else:
-        msg = r.get("result", {}).get("message", "")
-        result("block", f"hero_illustration  $2.00  → {msg}")
+    _action_line("hero_illustration", 2.00, r.get("result", {}))
 
 
 def stage_3_saas_provisioning() -> None:
@@ -144,31 +160,21 @@ def stage_3_saas_provisioning() -> None:
     step("Premium font license $40 — saas_dev_tools has no auto threshold")
     print("   ⏸  Dashboard has a pending MANAGER approval. **Reject** this one.")
     r = spend(JOB, "saas_dev_tools", 40.0, ref="premium_fonts_pack")
-    action = r.get("result", {}).get("action")
-    if action == "allow":
-        result("allow", "premium_fonts_pack  $40.00  → approved")
-    else:
-        msg = r.get("result", {}).get("message", "")
-        result("block", f"premium_fonts_pack  $40.00  → {msg}")
+    _action_line("premium_fonts_pack", 40.00, r.get("result", {}))
+    if r.get("result", {}).get("action") != "allow":
         result("info", "Agent self-corrects: try a cheaper alternative…")
 
     step("Agent retries with the standard font set: $5")
     print("   ⏸  Dashboard has a pending MANAGER approval. **Approve** this one.")
     r = spend(JOB, "saas_dev_tools", 5.0, ref="standard_fonts")
-    action = r.get("result", {}).get("action")
-    if action == "allow":
-        result("allow", "standard_fonts  $5.00  → approved by human")
-    else:
-        msg = r.get("result", {}).get("message", "")
-        result("block", f"standard_fonts  $5.00  → {msg}")
+    _action_line("standard_fonts", 5.00, r.get("result", {}))
 
 
 def stage_4_compute() -> None:
     banner("STAGE 4 — Render the carousel (compute cost center)")
     step("Own renderer pipeline $0.10 — well under auto threshold")
     r = spend(JOB, "compute", 0.10, ref="render_pipeline")
-    action = r.get("result", {}).get("action", "?")
-    result("allow" if action == "allow" else "block", f"render_pipeline  $0.10  → {action}")
+    _action_line("render_pipeline", 0.10, r.get("result", {}))
 
 
 def stage_5_greedy_ads() -> None:
@@ -176,12 +182,8 @@ def stage_5_greedy_ads() -> None:
     step("Ads boost $25 (marketing) — limit_usd=0 → hard-cap breach, finance tier")
     print("   ⏸  Dashboard has a pending FINANCE approval. **Reject** this one (out-of-category).")
     r = spend(JOB, "marketing", 25.0, ref="ads_boost_attempt")
-    action = r.get("result", {}).get("action")
-    if action == "allow":
-        result("allow", "ads_boost_attempt  $25.00  → approved (you let it through!)")
-    else:
-        msg = r.get("result", {}).get("message", "")
-        result("block", f"ads_boost_attempt  $25.00  → {msg}")
+    _action_line("ads_boost_attempt", 25.00, r.get("result", {}))
+    if r.get("result", {}).get("action") != "allow":
         result("info", "Agent stops — marketing is policy-denied for this engagement.")
 
 
