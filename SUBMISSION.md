@@ -142,17 +142,20 @@ wiring** uses it. We deliver all three:
   `POST /api/plugins/argus/webhooks/stripe` endpoint accepts both the
   flatter sim payloads the demo script uses and Stripe's actual
   envelope (nested `data.object`, cents as int, `metadata.job_id`).
-- **Round-trip verified** against `stripe trigger payment_intent.succeeded`
-  with `stripe listen --forward-to .../webhooks/stripe -H "Authorization:
-  Bearer ..."`. Argus extracts `metadata.job_id`, converts cents →
-  dollars, and stores the real `pi_...` id as the ledger `ref`. The
-  PaymentIntent remains valid against `stripe payment_intents retrieve`
-  after the fact — proof that this is not synthetic data:
+- **Round-trip verified** against real Stripe API calls. Both
+  directions of the money flow leave Argus with auditable `pi_...` /
+  `ch_...` IDs that remain valid against
+  `stripe payment_intents retrieve` / `stripe charges retrieve`:
+
+  | Ledger row | Stripe event | Ref | Status |
+  |---|---|---|---|
+  | revenue +$50 | `payment_intent.succeeded` | `pi_3TjKbgArkRxfRtnB1KlK1TYW` | metadata.job_id propagated ✓ |
+  | external_spend −$50 | `charge.refunded` | `ch_3TjKbgArkRxfRtnB1LzrKzUN` | metadata inherited from PI ✓ |
 
   ```json
   {
-    "id": "pi_3TjJs8ArkRxfRtnB06HmYl55",
-    "amount": 2000,
+    "id": "pi_3TjKbgArkRxfRtnB1KlK1TYW",
+    "amount": 5000,
     "status": "succeeded",
     "livemode": false,
     "metadata": { "job_id": "job-b-saas" }
