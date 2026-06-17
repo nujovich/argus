@@ -233,6 +233,106 @@ async def sim_spend(body: SimSpendBody) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Active tokens — for the dashboard's token-vault widget
+# ---------------------------------------------------------------------------
+
+
+@router.get("/tokens/active")
+async def tokens_active() -> dict:
+    """List currently-active (not consumed, not expired) auth tokens.
+    The dashboard renders them as a countdown widget."""
+    import sqlite3
+    import time as _time
+
+    conn = db._get_conn()
+    now_iso = db._now()
+    rows = conn.execute(
+        "SELECT token, issued_at, expires_at, job_id, cost_center_id,"
+        " amount_usd, approval_id"
+        " FROM auth_tokens"
+        " WHERE consumed_at IS NULL AND expires_at > ?"
+        " ORDER BY expires_at ASC",
+        (now_iso,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        # Truncate the token in the response — never expose full tokens.
+        d["token_preview"] = d["token"][:8] + "…"
+        del d["token"]
+        out.append(d)
+    return {"items": out}
+
+
+# ---------------------------------------------------------------------------
+# Run Mermelada commission directly from the dashboard (no terminal needed)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/demo/mermelada/run")
+async def run_mermelada_demo() -> dict:
+    """Trigger the Mermelada Studio commission flow end-to-end from the
+    dashboard. Approvals still come through the existing queue; this
+    endpoint just sequences the spends so the operator only needs the
+    browser. Returns when the commission is complete (may block for
+    several minutes if approvals are slow)."""
+    import hook as _hook
+    import anyio
+
+    JOB = "mermelada-commission-001"
+
+    def _spend(cost_center_id: str, amount: float, ref: str):
+        return _hook.process_declaration_for_api(
+            job_id=JOB,
+            cost_center_id=cost_center_id,
+            projected_usd=amount,
+            ref=ref,
+            task_id="dashboard-demo",
+        )
+
+    def _flow():
+        outcomes = []
+        # Stage 1 — sim revenue (if no real Stripe Checkout has been used)
+        db.insert_ledger_row(
+            job_id=JOB, kind="revenue", amount_usd=15.0,
+            source="stripe", ref="pi_sim_mermelada_commission",
+        )
+        db.log_audit(
+            "stripe", "revenue_received",
+            {"job_id": JOB, "amount_usd": 15.0, "ref": "pi_sim_mermelada_commission"},
+        )
+        outcomes.append({"stage": "customer_paid", "amount": 15.0})
+
+        # Stage 2 — image generation
+        for i in range(3):
+            r = _spend("image_gen", 0.30, f"bg_image_{i+1}")
+            outcomes.append({"stage": "image_gen", "outcome": r, "amount": 0.30})
+
+        r = _spend("image_gen", 2.00, "hero_illustration")
+        outcomes.append({"stage": "hero", "outcome": r, "amount": 2.00})
+
+        # Stage 3 — saas provisioning (reject then retry)
+        r = _spend("saas_dev_tools", 40.0, "premium_fonts_pack")
+        outcomes.append({"stage": "fonts_premium", "outcome": r, "amount": 40.0})
+
+        r = _spend("saas_dev_tools", 5.0, "standard_fonts")
+        outcomes.append({"stage": "fonts_standard", "outcome": r, "amount": 5.0})
+
+        # Stage 4 — compute
+        r = _spend("compute", 0.10, "render_pipeline")
+        outcomes.append({"stage": "compute", "outcome": r, "amount": 0.10})
+
+        # Stage 5 — greedy ads (will be blocked)
+        r = _spend("marketing", 25.0, "ads_boost_attempt")
+        outcomes.append({"stage": "ads_boost", "outcome": r, "amount": 25.0})
+
+        return outcomes
+
+    outcomes = await anyio.to_thread.run_sync(_flow)
+    return {"status": "completed", "outcomes": outcomes}
+
+
+# ---------------------------------------------------------------------------
 # Layer 2 — Stripe Issuing authorization webhook (network-layer backstop)
 # ---------------------------------------------------------------------------
 
