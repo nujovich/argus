@@ -170,7 +170,7 @@ live Argus API. It walks the operator through:
 
 Final P&L on the recorded take:
 
-![Argus dashboard — final P&L of the three-job demo](docs/pnl-final.png)
+![Argus dashboard — final P&L of the three-job demo](docs/pnl-final.webp)
 
 | Job              | Revenue | LLM (Nemotron) | External | P&L |
 |---|---:|---:|---:|---:|
