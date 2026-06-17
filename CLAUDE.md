@@ -340,6 +340,27 @@ These remain **OPEN** with a current leaning; lock them in the next session.
   and a human Approves/Rejects in real time, the agent visibly resumes (or
   cancels) from the held tool call.
 
+- **NVIDIA pillar — not free, must be earned in the demo.** Argus's code
+  is model-agnostic, which means the NVIDIA half of the brief
+  (NemoClaw / Nemotron 3 Ultra / NVIDIA agent skills) only counts if the
+  **demo wiring** uses them. Phase 4 deliverables that lock this in:
+  1. The three demo agents run on **Nemotron 3 Ultra via NemoClaw** —
+     configured in Hermes (not Argus). This makes the `llm_cost` column
+     in P&L specifically Nemotron-priced, surfaced by Argus's read-only
+     ATTACH to `hermes-telemetry`.
+  2. **At least one of the three jobs spends money on an NVIDIA surface**
+     — e.g. pays for a NIM inference endpoint, provisions a NeMo service,
+     or invokes a paid NVIDIA agent skill — so NVIDIA appears in the
+     `external_spend` ledger rows, not just in the runtime.
+  3. **Writeup line:** "Argus gates spend regardless of what the agent
+     does — the demo shows it governing three Hermes agents running on
+     Nemotron 3 Ultra through NemoClaw, each touching different
+     NVIDIA / SaaS / Stripe surfaces."
+
+  None of this requires Argus code changes; it's demo orchestration. But
+  if Phase 4 ships the gating flow without these three, the NVIDIA pillar
+  is decorative and judges will notice.
+
 ---
 
 ## 11. Guardrails for future sessions
