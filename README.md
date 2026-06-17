@@ -6,7 +6,7 @@ Horizontal financial control plane for money-spending Hermes agents.
 Meters every dollar in/out per job, tracks live P&L, and gates Stripe
 spends through a human-in-the-loop approval flow.
 
-![Argus dashboard — final P&L of the three-job demo](docs/pnl-final.webp)
+![Argus dashboard — Mermelada Studio commission, real Stripe + Nemotron + defense in depth](docs/pnl-final-real.webp)
 
 **Status:** Phase 4 — demo ready. Ledger, pure policy, `pre_tool_call`
 Capture + Enforcement hook, dashboard (P&L, approval queue, audit

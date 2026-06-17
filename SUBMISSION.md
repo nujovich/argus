@@ -37,7 +37,7 @@
 > Mermelada is one agent. **Argus is the infrastructure that any agent
 > with a wallet needs.**
 
-![Argus dashboard — final P&L of the three-job demo](docs/pnl-final.webp)
+![Argus dashboard — Mermelada Studio commission, real Stripe + Nemotron + defense in depth](docs/pnl-final-real.webp)
 
 ---
 
