@@ -152,6 +152,24 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             ON compute_allocations(status);
         """
     )
+    # Idempotent schema migrations — add columns that may not exist on
+    # an older DB without breaking startup.
+    for col_sql in (
+        "ALTER TABLE compute_allocations ADD COLUMN actual_model TEXT",
+        "ALTER TABLE compute_allocations ADD COLUMN integrity_status TEXT",
+    ):
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    conn.executescript(
+        """
+        -- guarantee schema_version exists for future migrations
+        CREATE TABLE IF NOT EXISTS _argus_schema_version (
+            version INTEGER PRIMARY KEY
+        );
+        """
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +439,85 @@ def update_allocation_status(alloc_id: int, status: str,
         " WHERE id=?",
         (status, downgrade_reason, alloc_id),
     )
+
+
+def set_actual_model(alloc_id: int, actual_model: str) -> None:
+    """Record what model was actually used for an allocation. In the real
+    flow this comes from the read-only ATTACH to hermes-telemetry's
+    runs.model. The deterministic demo records it directly to demonstrate
+    the silent-fallback case end-to-end."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE compute_allocations SET actual_model=? WHERE id=?",
+        (actual_model, alloc_id),
+    )
+
+
+def run_compute_integrity_sweep() -> List[Dict[str, Any]]:
+    """Compare each active allocation's authorized model against the
+    actual model used (from compute_allocations.actual_model or from a
+    telemetry session join). Returns the list of violations found and
+    writes a compute_integrity_violation audit row for each."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, job_id, cost_center_id, tier, model AS authorized_model,"
+        " actual_model, session_id, status"
+        " FROM compute_allocations"
+        " WHERE tier != 'reject' AND status='active'"
+    ).fetchall()
+
+    violations: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        observed = d.get("actual_model")
+        # If we have a session_id and the demo didn't pre-populate
+        # actual_model, peek at telemetry.runs (best-effort).
+        if not observed and d.get("session_id"):
+            try:
+                import config as _cfg
+                tele = _cfg.telemetry_db_path()
+                if tele.exists():
+                    conn.execute(
+                        "ATTACH DATABASE ? AS telemetry",
+                        (f"file:{tele}?mode=ro",),
+                    )
+                    trow = conn.execute(
+                        "SELECT model FROM telemetry.runs WHERE session_id=?",
+                        (d["session_id"],),
+                    ).fetchone()
+                    if trow and trow["model"]:
+                        observed = trow["model"]
+                    conn.execute("DETACH DATABASE telemetry")
+            except sqlite3.Error:
+                try:
+                    conn.execute("DETACH DATABASE telemetry")
+                except Exception:
+                    pass
+
+        if observed and observed != d["authorized_model"]:
+            payload = {
+                "allocation_id": d["id"],
+                "job_id": d["job_id"],
+                "cost_center_id": d["cost_center_id"],
+                "authorized_model": d["authorized_model"],
+                "observed_model": observed,
+                "tier_authorized": d["tier"],
+            }
+            conn.execute(
+                "UPDATE compute_allocations SET integrity_status='violation'"
+                " WHERE id=?",
+                (d["id"],),
+            )
+            log_audit("system", "compute_integrity_violation", payload)
+            violations.append(payload)
+        elif observed:
+            conn.execute(
+                "UPDATE compute_allocations SET integrity_status='ok'"
+                " WHERE id=? AND COALESCE(integrity_status,'') != 'violation'",
+                (d["id"],),
+            )
+    log_audit("system", "compute_integrity_sweep", {"violations": len(violations)})
+    return violations
 
 
 def get_job_burn(job_id: str) -> float:

@@ -328,32 +328,58 @@
       transition: "width 0.5s ease, background 0.3s ease"
     } })));
   }
+  function IntegrityBadge({ status, authorized, actual }) {
+    if (!status) return null;
+    if (status === "ok") {
+      return /* @__PURE__ */ React2.createElement(Badge, null, "\u2713 integrity OK");
+    }
+    if (status === "violation") {
+      return /* @__PURE__ */ React2.createElement("div", { style: {
+        display: "inline-flex",
+        flexDirection: "column",
+        alignItems: "flex-start"
+      } }, /* @__PURE__ */ React2.createElement(Badge, { variant: "destructive" }, "\u{1F6A8} INTEGRITY VIOLATION"), /* @__PURE__ */ React2.createElement("span", { style: { fontSize: "0.72em", color: "var(--color-destructive)", fontFamily: "monospace", marginTop: "2px" } }, "authorized: ", /* @__PURE__ */ React2.createElement("code", null, authorized), /* @__PURE__ */ React2.createElement("br", null), "observed:   ", /* @__PURE__ */ React2.createElement("code", null, actual)));
+    }
+    return null;
+  }
   function ComputeFleet({ fleet }) {
     const items = fleet?.items || [];
-    return /* @__PURE__ */ React2.createElement(Card, null, /* @__PURE__ */ React2.createElement(CardHeader, null, /* @__PURE__ */ React2.createElement(CardTitle, null, "Compute fleet \u2014 Argus allocating GPU as capital")), /* @__PURE__ */ React2.createElement(CardContent, null, items.length === 0 ? /* @__PURE__ */ React2.createElement("p", { style: { color: "var(--color-muted-foreground)" } }, "No compute allocations yet. Click ", /* @__PURE__ */ React2.createElement("strong", null, "\u25B6 Run AI Services Firm"), " below to fan out three jobs across the allocator.") : /* @__PURE__ */ React2.createElement("div", { style: { display: "grid", gap: "0.5rem" } }, items.map((it) => /* @__PURE__ */ React2.createElement(
-      "div",
-      {
-        key: it.job_id,
-        className: "argus-slide-in",
-        style: {
-          display: "grid",
-          gridTemplateColumns: "1.6fr 0.8fr 1.6fr 1.4fr",
-          gap: "0.6rem",
-          alignItems: "center",
-          padding: "0.6rem 0.8rem",
-          border: "1px solid var(--color-border)",
-          borderRadius: "var(--radius)",
-          background: it.tier === "reject" ? "rgba(220,38,38,0.06)" : "transparent"
-        }
-      },
-      /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600 } }, it.job_id), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: "0.75em", color: "var(--color-muted-foreground)", fontFamily: "monospace" } }, it.cost_center_id, " \xB7 ", it.model || "\u2014")),
-      /* @__PURE__ */ React2.createElement(TierBadge, { tier: it.tier }),
-      it.tier === "reject" ? /* @__PURE__ */ React2.createElement("span", { style: { color: "var(--color-destructive)", fontSize: "0.85em" } }, "Not authorized \u2014 margin would be negative") : /* @__PURE__ */ React2.createElement(BurnBar, { ratio: it.burn_ratio, budget: it.compute_budget_usd, burn: it.actual_burn_usd }),
-      /* @__PURE__ */ React2.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: "0.75em", color: "var(--color-muted-foreground)" } }, "margin"), /* @__PURE__ */ React2.createElement("div", { style: {
-        fontWeight: 700,
-        color: (it.current_margin_usd ?? 0) >= 0 ? "var(--color-success, #16a34a)" : "var(--color-destructive)"
-      } }, fmtUsd(it.current_margin_usd)))
-    )))));
+    const violations = items.filter((it) => it.integrity_status === "violation").length;
+    return /* @__PURE__ */ React2.createElement(Card, null, /* @__PURE__ */ React2.createElement(CardHeader, null, /* @__PURE__ */ React2.createElement(CardTitle, null, "Compute fleet \u2014 Argus allocating GPU as capital", violations > 0 && /* @__PURE__ */ React2.createElement("span", { style: { marginLeft: "0.6rem" } }, /* @__PURE__ */ React2.createElement(Badge, { variant: "destructive" }, "\u{1F6A8} ", violations, " integrity violation", violations > 1 ? "s" : "")))), /* @__PURE__ */ React2.createElement(CardContent, null, items.length === 0 ? /* @__PURE__ */ React2.createElement("p", { style: { color: "var(--color-muted-foreground)" } }, "No compute allocations yet. Click ", /* @__PURE__ */ React2.createElement("strong", null, "\u25B6 Run AI Services Firm"), " below to fan out three jobs across the allocator.") : /* @__PURE__ */ React2.createElement("div", { style: { display: "grid", gap: "0.5rem" } }, items.map((it) => {
+      const isViolation = it.integrity_status === "violation";
+      return /* @__PURE__ */ React2.createElement(
+        "div",
+        {
+          key: it.job_id,
+          className: "argus-slide-in",
+          style: {
+            display: "grid",
+            gridTemplateColumns: "1.6fr 0.9fr 1.5fr 1.3fr 0.9fr",
+            gap: "0.6rem",
+            alignItems: "center",
+            padding: "0.6rem 0.8rem",
+            border: isViolation ? "1px solid var(--color-destructive)" : "1px solid var(--color-border)",
+            borderRadius: "var(--radius)",
+            background: it.tier === "reject" ? "rgba(220,38,38,0.06)" : isViolation ? "rgba(220,38,38,0.06)" : "transparent"
+          }
+        },
+        /* @__PURE__ */ React2.createElement("div", null, /* @__PURE__ */ React2.createElement("div", { style: { fontWeight: 600 } }, it.job_id), /* @__PURE__ */ React2.createElement("div", { style: { fontSize: "0.75em", color: "var(--color-muted-foreground)", fontFamily: "monospace" } }, it.cost_center_id, " \xB7 ", it.model || "\u2014")),
+        /* @__PURE__ */ React2.createElement(TierBadge, { tier: it.tier }),
+        it.tier === "reject" ? /* @__PURE__ */ React2.createElement("span", { style: { color: "var(--color-destructive)", fontSize: "0.85em" } }, "Not authorized \u2014 margin would be negative") : /* @__PURE__ */ React2.createElement(BurnBar, { ratio: it.burn_ratio, budget: it.compute_budget_usd, burn: it.actual_burn_usd }),
+        /* @__PURE__ */ React2.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React2.createElement("div", { style: { fontSize: "0.75em", color: "var(--color-muted-foreground)" } }, "margin"), /* @__PURE__ */ React2.createElement("div", { style: {
+          fontWeight: 700,
+          color: (it.current_margin_usd ?? 0) >= 0 ? "var(--color-success, #16a34a)" : "var(--color-destructive)"
+        } }, fmtUsd(it.current_margin_usd))),
+        /* @__PURE__ */ React2.createElement(
+          IntegrityBadge,
+          {
+            status: it.integrity_status,
+            authorized: it.model,
+            actual: it.actual_model
+          }
+        )
+      );
+    }))));
   }
   function AuditSection() {
     const { data, error } = usePolling("/api/plugins/argus/audit?limit=40", FAST_POLL_MS);

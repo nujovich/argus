@@ -474,12 +474,41 @@ function BurnBar({ ratio, budget, burn }) {
   );
 }
 
+function IntegrityBadge({ status, authorized, actual }) {
+  if (!status) return null;
+  if (status === "ok") {
+    return <Badge>✓ integrity OK</Badge>;
+  }
+  if (status === "violation") {
+    return (
+      <div style={{
+        display: "inline-flex", flexDirection: "column", alignItems: "flex-start",
+      }}>
+        <Badge variant="destructive">🚨 INTEGRITY VIOLATION</Badge>
+        <span style={{ fontSize: "0.72em", color: "var(--color-destructive)", fontFamily: "monospace", marginTop: "2px" }}>
+          authorized: <code>{authorized}</code><br />
+          observed:   <code>{actual}</code>
+        </span>
+      </div>
+    );
+  }
+  return null;
+}
+
 function ComputeFleet({ fleet }) {
   const items = fleet?.items || [];
+  const violations = items.filter((it) => it.integrity_status === "violation").length;
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Compute fleet — Argus allocating GPU as capital</CardTitle>
+        <CardTitle>
+          Compute fleet — Argus allocating GPU as capital
+          {violations > 0 && (
+            <span style={{ marginLeft: "0.6rem" }}>
+              <Badge variant="destructive">🚨 {violations} integrity violation{violations > 1 ? "s" : ""}</Badge>
+            </span>
+          )}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
@@ -488,43 +517,54 @@ function ComputeFleet({ fleet }) {
           </p>
         ) : (
           <div style={{ display: "grid", gap: "0.5rem" }}>
-            {items.map((it) => (
-              <div key={it.job_id} className="argus-slide-in"
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1.6fr 0.8fr 1.6fr 1.4fr",
-                  gap: "0.6rem", alignItems: "center",
-                  padding: "0.6rem 0.8rem",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: "var(--radius)",
-                  background: it.tier === "reject" ? "rgba(220,38,38,0.06)" : "transparent",
-                }}>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{it.job_id}</div>
-                  <div style={{ fontSize: "0.75em", color: "var(--color-muted-foreground)", fontFamily: "monospace" }}>
-                    {it.cost_center_id} · {it.model || "—"}
-                  </div>
-                </div>
-                <TierBadge tier={it.tier} />
-                {it.tier === "reject" ? (
-                  <span style={{ color: "var(--color-destructive)", fontSize: "0.85em" }}>
-                    Not authorized — margin would be negative
-                  </span>
-                ) : (
-                  <BurnBar ratio={it.burn_ratio} budget={it.compute_budget_usd} burn={it.actual_burn_usd} />
-                )}
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: "0.75em", color: "var(--color-muted-foreground)" }}>margin</div>
-                  <div style={{ fontWeight: 700,
-                    color: (it.current_margin_usd ?? 0) >= 0
-                      ? "var(--color-success, #16a34a)"
-                      : "var(--color-destructive)",
+            {items.map((it) => {
+              const isViolation = it.integrity_status === "violation";
+              return (
+                <div key={it.job_id} className="argus-slide-in"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1.6fr 0.9fr 1.5fr 1.3fr 0.9fr",
+                    gap: "0.6rem", alignItems: "center",
+                    padding: "0.6rem 0.8rem",
+                    border: isViolation ? "1px solid var(--color-destructive)" : "1px solid var(--color-border)",
+                    borderRadius: "var(--radius)",
+                    background:
+                      it.tier === "reject" ? "rgba(220,38,38,0.06)"
+                      : isViolation ? "rgba(220,38,38,0.06)"
+                      : "transparent",
                   }}>
-                    {fmtUsd(it.current_margin_usd)}
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{it.job_id}</div>
+                    <div style={{ fontSize: "0.75em", color: "var(--color-muted-foreground)", fontFamily: "monospace" }}>
+                      {it.cost_center_id} · {it.model || "—"}
+                    </div>
                   </div>
+                  <TierBadge tier={it.tier} />
+                  {it.tier === "reject" ? (
+                    <span style={{ color: "var(--color-destructive)", fontSize: "0.85em" }}>
+                      Not authorized — margin would be negative
+                    </span>
+                  ) : (
+                    <BurnBar ratio={it.burn_ratio} budget={it.compute_budget_usd} burn={it.actual_burn_usd} />
+                  )}
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: "0.75em", color: "var(--color-muted-foreground)" }}>margin</div>
+                    <div style={{ fontWeight: 700,
+                      color: (it.current_margin_usd ?? 0) >= 0
+                        ? "var(--color-success, #16a34a)"
+                        : "var(--color-destructive)",
+                    }}>
+                      {fmtUsd(it.current_margin_usd)}
+                    </div>
+                  </div>
+                  <IntegrityBadge
+                    status={it.integrity_status}
+                    authorized={it.model}
+                    actual={it.actual_model}
+                  />
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </CardContent>

@@ -332,6 +332,8 @@ async def compute_fleet() -> dict:
             "cost_center_id": a["cost_center_id"],
             "tier": a["tier"],
             "model": a["model"],
+            "actual_model": a.get("actual_model"),
+            "integrity_status": a.get("integrity_status"),
             "status": a["status"],
             "compute_budget_usd": budget,
             "actual_burn_usd": burn,
@@ -445,6 +447,31 @@ async def run_mermelada_demo() -> dict:
     return {"status": "completed", "outcomes": outcomes}
 
 
+@router.post("/admin/compute_integrity_sweep")
+async def compute_integrity_sweep() -> dict:
+    """Run a compute-integrity inspection: for each active allocation,
+    compare the model the agent was authorized to use against the model
+    that telemetry says actually ran. Mismatches are logged to the audit
+    trail as `compute_integrity_violation` events. See CLAUDE.md §3.2."""
+    violations = db.run_compute_integrity_sweep()
+    return {"status": "ok", "violations": violations}
+
+
+@router.post("/admin/set_actual_model")
+async def admin_set_actual_model(body: dict) -> dict:
+    """Demo-only: record the model that 'actually ran' for an allocation,
+    bypassing the telemetry ATTACH. The deterministic demo uses this to
+    inject a silent-fallback scenario (authorized Ultra, observed Base)
+    so the integrity sweep has something to flag without needing a live
+    Hermes chat."""
+    alloc_id = int(body.get("allocation_id") or 0)
+    actual_model = str(body.get("actual_model") or "")
+    if not alloc_id or not actual_model:
+        return {"error": "allocation_id + actual_model required"}
+    db.set_actual_model(alloc_id, actual_model)
+    return {"ok": True, "allocation_id": alloc_id, "actual_model": actual_model}
+
+
 @router.post("/demo/ai-services-firm/run")
 async def run_ai_services_firm_demo() -> dict:
     """Drive the AI services firm demo end-to-end from the dashboard.
@@ -468,6 +495,12 @@ async def run_ai_services_firm_demo() -> dict:
             task_id="dashboard-demo-a",
         )
         outcomes.append({"job": "research-enterprise-001", "compute": a})
+        # Demo wrinkle: Job A was authorized for Ultra, but we simulate
+        # a silent fallback to Base — the agent thought it was on Ultra,
+        # actually ran on Base. The integrity sweep flags it.
+        alloc_a_id = a.get("allocation_id")
+        if alloc_a_id:
+            db.set_actual_model(alloc_a_id, "nvidia/nemotron-3-base-9b")
         db.insert_ledger_row(
             job_id="research-enterprise-001", kind="revenue",
             amount_usd=200.0, source="stripe",
@@ -521,6 +554,17 @@ async def run_ai_services_firm_demo() -> dict:
             ref="vanity_lookup", task_id="dashboard-demo-c",
         )
         outcomes.append({"job": "research-vanity-099", "compute": c})
+
+        # Record Job B's actual model = the authorized base model (no
+        # mismatch — keeps the demo honest, only Job A flags violation).
+        b_alloc = db.get_latest_active_allocation("gen-tweet-042")
+        if b_alloc:
+            db.set_actual_model(b_alloc["id"], "nvidia/nemotron-3-base-9b")
+
+        # Now run the integrity sweep. Job A will flag as silent fallback;
+        # Job B is clean; Job C never had an active allocation (rejected).
+        violations = db.run_compute_integrity_sweep()
+        outcomes.append({"integrity_violations": violations})
 
         return outcomes
 
