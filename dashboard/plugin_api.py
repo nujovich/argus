@@ -332,6 +332,56 @@ async def run_mermelada_demo() -> dict:
     return {"status": "completed", "outcomes": outcomes}
 
 
+@router.post("/demo/reset")
+async def demo_reset() -> dict:
+    """Wipe the demo state so the dashboard is clean for the next take.
+
+    Deletes everything from ledger, approval_requests, audit_trail, and
+    auth_tokens. Re-inserts the Nemotron session anchor row if telemetry
+    has at least one priced session, so the LLM cost column lights up
+    immediately on the next /pnl call."""
+    conn = db._get_conn()
+    conn.execute("DELETE FROM ledger")
+    conn.execute("DELETE FROM approval_requests")
+    conn.execute("DELETE FROM audit_trail")
+    conn.execute("DELETE FROM auth_tokens")
+
+    # Try to re-anchor a recent priced telemetry session so the LLM
+    # column isn't $0.00 on the next run.
+    re_anchored = None
+    tele_path = _cfg.telemetry_db_path()
+    if tele_path.exists():
+        try:
+            conn.execute(
+                "ATTACH DATABASE ? AS telemetry",
+                (f"file:{tele_path}?mode=ro",),
+            )
+            row = conn.execute(
+                "SELECT session_id FROM telemetry.runs"
+                " WHERE cost_usd > 0 ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            if row and row["session_id"]:
+                db.insert_ledger_row(
+                    job_id="mermelada-commission-001",
+                    kind="external_spend",
+                    amount_usd=0.0,
+                    source="session_anchor",
+                    ref=None,
+                    session_id=row["session_id"],
+                )
+                re_anchored = row["session_id"]
+        except Exception:
+            pass
+        finally:
+            try:
+                conn.execute("DETACH DATABASE telemetry")
+            except Exception:
+                pass
+
+    db.log_audit("system", "demo_reset", {"re_anchored_session": re_anchored})
+    return {"status": "reset", "anchored_session": re_anchored}
+
+
 # ---------------------------------------------------------------------------
 # Layer 2 — Stripe Issuing authorization webhook (network-layer backstop)
 # ---------------------------------------------------------------------------

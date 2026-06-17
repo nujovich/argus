@@ -499,18 +499,33 @@ function StartCommissionButton() {
       setRunning(false);
     }
   };
+  const reset = async () => {
+    if (!confirm("Wipe ledger + approvals + audit + tokens? (re-anchors latest Nemotron session)")) return;
+    try {
+      await SDK.fetchJSON("/api/plugins/argus/demo/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   return (
     <Card>
       <CardHeader>
         <CardTitle>Start a Mermelada commission</CardTitle>
       </CardHeader>
       <CardContent>
-        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
           <Button onClick={start} disabled={running}>
             {running ? "⏳ Commission in progress — approve in queue above" : "▶ Start commission"}
           </Button>
+          <Button variant="destructive" onClick={reset} disabled={running}>
+            ↺ Reset demo
+          </Button>
           <span style={{ color: "var(--color-muted-foreground)", fontSize: "0.85em" }}>
-            Triggers the full earn-and-spend loop. Approvals appear in the queue below.
+            Reset wipes the ledger and re-anchors the latest Nemotron session.
           </span>
         </div>
         {error && <Badge variant="destructive" style={{ marginTop: "0.5rem" }}>error: {error}</Badge>}

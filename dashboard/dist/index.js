@@ -341,7 +341,19 @@
         setRunning(false);
       }
     };
-    return /* @__PURE__ */ React2.createElement(Card, null, /* @__PURE__ */ React2.createElement(CardHeader, null, /* @__PURE__ */ React2.createElement(CardTitle, null, "Start a Mermelada commission")), /* @__PURE__ */ React2.createElement(CardContent, null, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: "1rem", alignItems: "center" } }, /* @__PURE__ */ React2.createElement(Button, { onClick: start, disabled: running }, running ? "\u23F3 Commission in progress \u2014 approve in queue above" : "\u25B6 Start commission"), /* @__PURE__ */ React2.createElement("span", { style: { color: "var(--color-muted-foreground)", fontSize: "0.85em" } }, "Triggers the full earn-and-spend loop. Approvals appear in the queue below.")), error && /* @__PURE__ */ React2.createElement(Badge, { variant: "destructive", style: { marginTop: "0.5rem" } }, "error: ", error)));
+    const reset = async () => {
+      if (!confirm("Wipe ledger + approvals + audit + tokens? (re-anchors latest Nemotron session)")) return;
+      try {
+        await SDK.fetchJSON("/api/plugins/argus/demo/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+      } catch (e) {
+        setError(String(e));
+      }
+    };
+    return /* @__PURE__ */ React2.createElement(Card, null, /* @__PURE__ */ React2.createElement(CardHeader, null, /* @__PURE__ */ React2.createElement(CardTitle, null, "Start a Mermelada commission")), /* @__PURE__ */ React2.createElement(CardContent, null, /* @__PURE__ */ React2.createElement("div", { style: { display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" } }, /* @__PURE__ */ React2.createElement(Button, { onClick: start, disabled: running }, running ? "\u23F3 Commission in progress \u2014 approve in queue above" : "\u25B6 Start commission"), /* @__PURE__ */ React2.createElement(Button, { variant: "destructive", onClick: reset, disabled: running }, "\u21BA Reset demo"), /* @__PURE__ */ React2.createElement("span", { style: { color: "var(--color-muted-foreground)", fontSize: "0.85em" } }, "Reset wipes the ledger and re-anchors the latest Nemotron session.")), error && /* @__PURE__ */ React2.createElement(Badge, { variant: "destructive", style: { marginTop: "0.5rem" } }, "error: ", error)));
   }
   function ArgusPage() {
     useAnimationsCSS();
