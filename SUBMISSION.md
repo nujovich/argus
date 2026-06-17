@@ -216,18 +216,21 @@ Hermes 0.16, a Nemotron / NemoClaw key, and ~10 minutes.
 The hackathon brief asked for "business tooling on top of Stripe
 Skills + NVIDIA agents." Argus is the **horizontal** version of that
 ask: not one automated company, but the **control plane every company
-needs** before they let an agent touch the wallet. Phase 5 (post-
-deadline):
-
-- Real-time Stripe API for refund-on-reject.
-- Cost-center YAML editor inside the dashboard.
-- SSE in place of 1.5s polling.
-- A `request_spend` agent skill so the explicit-declaration path is a
-  one-line agent-side import, not a hand-rolled tool definition.
-- Multi-tenant: per-org budgets and approval routing.
+needs** before they let an agent touch the wallet.
 
 The brain (`policy.py`) is a pure function. Everything else is a
-sufficient set of pipes around that fact.
+sufficient set of pipes around that fact. Post-deadline roadmap lives
+in [`FUTURE.md`](./FUTURE.md), organised by tier:
+
+- **Tier 1 (real gaps):** refund-on-reject via Stripe API, real
+  Hermes-agent driving the demo, NemoClaw routing verification.
+- **Tier 2 (polish):** SSE in place of polling, cost-center editor
+  inside the dashboard, soft-threshold warnings, audit search.
+- **Tier 3 (bigger swings):** multi-tenant per-org budgets, cross-job
+  revenue attribution, recurring/subscription spends, spend
+  forecasting.
+- **Tier 4 (explicitly NOT doing):** Postgres rewrite, React framework
+  upgrade, Stripe Connect.
 
 ---
 
