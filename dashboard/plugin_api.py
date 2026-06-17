@@ -89,7 +89,7 @@ async def decide(req_id: str, body: DecideBody) -> dict:
         raise HTTPException(status_code=409, detail="approval not pending or unknown")
     db.log_audit(
         body.actor,
-        f"approval_{body.decision}d",
+        f"approval_{mapped}",
         {"approval_id": req_id, "reason": body.reason},
     )
     return {"id": req_id, "status": mapped}
