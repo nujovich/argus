@@ -16,11 +16,16 @@ def test_unrelated_tool_passes_through(tmp_hermes_home):
     assert db.get_recent_audit(10) == []
 
 
-def test_missing_declaration_is_logged_and_allowed(tmp_hermes_home):
-    result = hook.on_pre_tool_call("stripe_create_payment_intent", {}, "session-1")
-    assert result is None
-    events = [a["event"] for a in db.get_recent_audit(10)]
-    assert "spend_skipped_missing_declaration" in events
+def test_missing_declaration_is_blocked(tmp_hermes_home):
+    """Default changed in v1.1 — missing declaration BLOCKS instead of
+    silently allowing. See CLAUDE.md §6 (defense in depth)."""
+    result = hook.on_pre_tool_call("argus_request_spend", {}, "session-1")
+    assert isinstance(result, dict) and result["action"] == "block"
+    # Stripe calls without auth token are also blocked.
+    result2 = hook.on_pre_tool_call(
+        "stripe_create_payment_intent", {"amount": 100}, "session-1"
+    )
+    assert isinstance(result2, dict) and result2["action"] == "block"
 
 
 def test_auto_approve_under_threshold(tmp_hermes_home):

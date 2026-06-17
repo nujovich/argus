@@ -210,20 +210,90 @@ class SimSpendBody(BaseModel):
 async def sim_spend(body: SimSpendBody) -> dict:
     """Drive the gating pipeline end-to-end. Used by the deterministic
     demo driver AND by live Hermes agents that hit this endpoint via the
-    terminal/HTTP tool — the agent's own task_id should be passed as
-    ``session_id`` so the ledger row joins correctly against telemetry."""
-    import hook as _hook  # local import: keep startup light
+    terminal/HTTP tool.
 
-    args = {
-        "job_id": body.job_id,
-        "cost_center_id": body.cost_center_id,
-        "projected_usd": body.projected_usd,
-        "ref": body.ref,
-    }
+    On ALLOW the response carries an ``auth_token`` the agent must echo in
+    its next Stripe call's ``metadata.argus_auth_token``. Without it, the
+    hook's backstop layer blocks the Stripe spend (see CLAUDE.md §6)."""
+    import hook as _hook
+
     task_id = body.session_id or "sim"
     import anyio
 
     result = await anyio.to_thread.run_sync(
-        lambda: _hook.on_pre_tool_call("argus_request_spend", args, task_id)
+        lambda: _hook.process_declaration_for_api(
+            job_id=body.job_id,
+            cost_center_id=body.cost_center_id,
+            projected_usd=body.projected_usd,
+            ref=body.ref,
+            task_id=task_id,
+        )
     )
-    return {"result": result or {"action": "allow"}}
+    return {"result": result}
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — Stripe Issuing authorization webhook (network-layer backstop)
+# ---------------------------------------------------------------------------
+
+
+class IssuingAuthorizationEvent(BaseModel):
+    """Subset of the Stripe Issuing authorization webhook payload we read.
+
+    Stripe sends ``issuing_authorization.request`` for every charge attempt
+    against a managed virtual card. We have a few seconds to respond with
+    ``approve`` or ``decline``. With Argus wired in, a rogue agent that
+    bypasses Hermes entirely and hits Stripe API directly still can't move
+    money — the card itself declines at the network layer."""
+
+    type: str
+    data: dict
+
+
+@router.post("/webhooks/stripe-issuing-authorization")
+async def stripe_issuing_authorization(evt: IssuingAuthorizationEvent) -> dict:
+    """Defense-in-depth: validate the Argus auth token attached to the
+    Stripe Issuing authorization. Approve only if a valid token covers
+    this exact amount + job."""
+    payload = evt.data or {}
+    obj = payload.get("object") if isinstance(payload.get("object"), dict) else payload
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+
+    token = metadata.get("argus_auth_token")
+    job_id = metadata.get("job_id")
+    amount_cents = obj.get("amount") or obj.get("pending_request", {}).get("amount") or 0
+    amount_usd = float(amount_cents) / 100.0 if isinstance(amount_cents, int) else float(amount_cents or 0)
+    auth_id = obj.get("id")
+
+    audit = {
+        "auth_id": auth_id,
+        "job_id": job_id,
+        "amount_usd": amount_usd,
+        "has_token": bool(token),
+    }
+
+    if evt.type != "issuing_authorization.request":
+        db.log_audit("stripe-issuing", "webhook_ignored", {"type": evt.type, **audit})
+        return {"recorded": "ignored", "type": evt.type}
+
+    check = db.validate_and_consume_auth_token(
+        token or "",
+        actual_amount_usd=amount_usd,
+        actual_job_id=job_id,
+        ref=auth_id,
+    )
+
+    if check.valid:
+        db.log_audit(
+            "stripe-issuing", "card_authorized",
+            {**audit, "token": (token or "")[:8] + "..."},
+        )
+        # Stripe expects { "approved": true } on this webhook (test mode
+        # respects this; live mode also requires real-time-auth setup).
+        return {"approved": True}
+
+    db.log_audit(
+        "stripe-issuing", "card_declined",
+        {**audit, "reason": check.reason},
+    )
+    return {"approved": False, "decline_reason": check.reason}

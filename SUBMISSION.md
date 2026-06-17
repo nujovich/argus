@@ -41,6 +41,49 @@
 
 ---
 
+## The killer question — and the answer
+
+> *"What stops the agent from skipping `argus_request_spend` and
+> calling Stripe directly?"*
+
+A pure declaration model is fragile — a prompt-injected agent could
+just not ask. Argus enforces in **two layers**, with the obligatory
+plane underneath the cooperative one:
+
+### Layer 1 — In-process backstop (`pre_tool_call` hook)
+
+Every Stripe-skill invocation (`stripe_*`) is intercepted by Argus's
+`pre_tool_call` hook. The hook **requires** a valid Argus auth token
+in `args.metadata.argus_auth_token`. The token:
+
+- Is issued by Argus only on a successful `argus_request_spend` (auto
+  or human-approved).
+- Carries the approved `job_id`, `cost_center_id`, and amount.
+- Lives 60 seconds, single-use.
+- Validates the actual Stripe charge amount within ±10%.
+
+An agent that skips the declaration has no token → its Stripe call
+is **blocked at the hook**, with a clear error fed back to the model.
+
+### Layer 2 — Network-layer enforcement (Stripe Issuing)
+
+Argus exposes `POST /webhooks/stripe-issuing-authorization`. When the
+agent's virtual card attempts a charge, Stripe sends a real-time
+authorization request. Argus checks for a matching active auth token
+and replies `{"approved": true}` or `{"approved": false}`.
+
+**Even if the agent bypasses Hermes entirely** — exfiltrates Stripe
+credentials, calls the API directly — the charge declines at the
+card-network level. Production wiring requires the standard Stripe
+Issuing setup (see [`FUTURE.md`](./FUTURE.md) Tier 1); the endpoint +
+token logic ship in v1 and validate against real
+`issuing_authorization.request` payloads.
+
+> **We enforce in the agent's runtime AND on the card network. The
+> rogue agent doesn't get past either.**
+
+---
+
 ## Why this matters — and the competitive moat
 
 Hermes 0.16 ships **Stripe Skills**: agents can now buy things,

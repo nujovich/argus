@@ -107,6 +107,25 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             payload TEXT
         );
         CREATE INDEX IF NOT EXISTS audit_ts_idx ON audit_trail(ts DESC);
+
+        -- Defense in depth: every ALLOW issues a short-lived single-use
+        -- token. The agent must include token in metadata.argus_auth_token
+        -- on its next Stripe call; the hook validates against this table.
+        -- Without a valid token, Stripe spends are BLOCKED — even if the
+        -- agent never called argus_request_spend first. See CLAUDE.md §6.
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            token           TEXT PRIMARY KEY,
+            issued_at       TEXT NOT NULL,
+            expires_at      TEXT NOT NULL,
+            job_id          TEXT NOT NULL,
+            cost_center_id  TEXT NOT NULL,
+            amount_usd      REAL NOT NULL,
+            tolerance_pct   REAL NOT NULL DEFAULT 0.10,
+            approval_id     TEXT,
+            consumed_at     TEXT,
+            consumed_by_ref TEXT
+        );
+        CREATE INDEX IF NOT EXISTS auth_tokens_expires_idx ON auth_tokens(expires_at);
         """
     )
 
@@ -187,6 +206,128 @@ def log_audit(actor: str, event: str, payload: Optional[Dict[str, Any]] = None) 
         "INSERT INTO audit_trail(ts, actor, event, payload) VALUES(?,?,?,?)",
         (_now(), actor, event, json.dumps(payload) if payload is not None else None),
     )
+
+
+# ---------------------------------------------------------------------------
+# Auth tokens — defense in depth, see CLAUDE.md §6
+# ---------------------------------------------------------------------------
+
+
+def _now_epoch() -> float:
+    return time.time()
+
+
+def issue_auth_token(
+    *,
+    job_id: str,
+    cost_center_id: str,
+    amount_usd: float,
+    ttl_seconds: int = 60,
+    tolerance_pct: float = 0.10,
+    approval_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mint a short-lived single-use auth token. The agent must echo it in
+    the next Stripe call's ``metadata.argus_auth_token`` for the spend to
+    pass the in-process backstop check."""
+    token = uuid.uuid4().hex
+    issued = _now_epoch()
+    expires = issued + ttl_seconds
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO auth_tokens(token, issued_at, expires_at, job_id,"
+        " cost_center_id, amount_usd, tolerance_pct, approval_id)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (
+            token,
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(issued)),
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(expires)),
+            job_id,
+            cost_center_id,
+            float(amount_usd),
+            float(tolerance_pct),
+            approval_id,
+        ),
+    )
+    return {
+        "auth_token": token,
+        "expires_in": ttl_seconds,
+        "amount_usd": float(amount_usd),
+        "job_id": job_id,
+        "cost_center_id": cost_center_id,
+        "tolerance_pct": tolerance_pct,
+    }
+
+
+@dataclass(frozen=True)
+class AuthTokenCheck:
+    valid: bool
+    reason: str
+    token_row: Optional[Dict[str, Any]] = None
+
+
+def validate_and_consume_auth_token(
+    token: str,
+    *,
+    actual_amount_usd: float,
+    actual_job_id: Optional[str] = None,
+    ref: Optional[str] = None,
+) -> AuthTokenCheck:
+    """Look up + atomically consume an auth token. Reject if expired,
+    already consumed, or if the actual charge doesn't match (job_id +
+    amount within tolerance)."""
+    if not token:
+        return AuthTokenCheck(False, "missing_token")
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT token, issued_at, expires_at, job_id, cost_center_id,"
+        " amount_usd, tolerance_pct, consumed_at"
+        " FROM auth_tokens WHERE token=?",
+        (token,),
+    ).fetchone()
+    if row is None:
+        return AuthTokenCheck(False, "unknown_token")
+    d = dict(row)
+    if d["consumed_at"] is not None:
+        return AuthTokenCheck(False, "already_consumed", d)
+
+    # Expiry: compare ISO strings; ISO Zulu lexsort is correct here.
+    now_iso = _now()
+    if now_iso > d["expires_at"]:
+        return AuthTokenCheck(False, "expired", d)
+
+    if actual_job_id is not None and actual_job_id != d["job_id"]:
+        return AuthTokenCheck(False, f"job_mismatch:{actual_job_id}_vs_{d['job_id']}", d)
+
+    expected = d["amount_usd"]
+    tol = d["tolerance_pct"]
+    if expected > 0:
+        delta_pct = abs(actual_amount_usd - expected) / expected
+        if delta_pct > tol:
+            return AuthTokenCheck(
+                False,
+                f"amount_mismatch:{actual_amount_usd:.2f}_vs_{expected:.2f}(tol={tol:.0%})",
+                d,
+            )
+
+    cur = conn.execute(
+        "UPDATE auth_tokens SET consumed_at=?, consumed_by_ref=?"
+        " WHERE token=? AND consumed_at IS NULL",
+        (now_iso, ref, token),
+    )
+    if cur.rowcount == 0:
+        # Race: another consumer just took it.
+        return AuthTokenCheck(False, "race_consumed", d)
+    return AuthTokenCheck(True, "ok", d)
+
+
+def get_active_token_count() -> int:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM auth_tokens"
+        " WHERE consumed_at IS NULL AND expires_at > ?",
+        (_now(),),
+    ).fetchone()
+    return int(row["c"] or 0)
 
 
 # ---------------------------------------------------------------------------

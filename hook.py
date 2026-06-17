@@ -1,13 +1,17 @@
 """Argus Capture + Enforcement — the pre_tool_call hook.
 
-Fires before every tool. When the tool is a spend-related call (Stripe skill
-or the explicit argus_request_spend declaration), Argus reads the budget,
-runs the pure policy, and either lets the tool proceed or creates an
-approval request and **synchronously holds** until a human decides — see
-CLAUDE.md §6 for why this shape.
+Fires before every tool. Two enforcement modes:
 
-Out-of-shape calls (anything not declared as a spend) are pass-through so
-agents that don't opt in keep working.
+1. ``argus_request_spend`` (the cooperative path) — the agent declares its
+   intent BEFORE the Stripe call. Policy gates the declaration; on ALLOW
+   Argus issues a short-lived single-use auth token the agent must include
+   in the next Stripe call's ``metadata.argus_auth_token``.
+
+2. ``stripe_*`` (the backstop) — every Stripe-skill invocation MUST carry
+   a valid Argus auth token in its arguments. Without it, the spend is
+   blocked. A rogue agent that skips step 1 has no way to pass this check.
+
+See CLAUDE.md §6 for the design rationale.
 """
 
 from __future__ import annotations
@@ -20,10 +24,9 @@ import db
 import policy
 
 
-# Match anything that looks like an outbound Stripe spend. The explicit
-# declaration skill ('argus_request_spend') is the documented path; the
-# stripe_* prefix catches accidental direct calls so we audit them.
+# The cooperative declaration tool the agent should call.
 _DECL_TOOL = "argus_request_spend"
+# The Stripe-skill prefix the hook backstops on.
 _STRIPE_PREFIX = "stripe_"
 
 
@@ -32,9 +35,22 @@ _STRIPE_PREFIX = "stripe_"
 APPROVAL_TIMEOUT_SEC = 300
 POLL_INTERVAL_SEC = 0.5
 
+# Auth-token lifetime: short by design. The agent must declare and spend
+# in quick succession.
+AUTH_TOKEN_TTL_SEC = 60
+AUTH_TOKEN_TOLERANCE = 0.10  # ±10% on amount
+
+
+def _is_decl_call(tool_name: str) -> bool:
+    return tool_name == _DECL_TOOL
+
+
+def _is_stripe_call(tool_name: str) -> bool:
+    return tool_name.startswith(_STRIPE_PREFIX)
+
 
 def _is_spend_call(tool_name: str) -> bool:
-    return tool_name == _DECL_TOOL or tool_name.startswith(_STRIPE_PREFIX)
+    return _is_decl_call(tool_name) or _is_stripe_call(tool_name)
 
 
 def _extract_declaration(
@@ -42,8 +58,7 @@ def _extract_declaration(
 ) -> Optional[policy.SpendDeclaration]:
     """Pull (job_id, cost_center_id, projected_usd, ref) out of tool args.
 
-    Returns None when the call isn't a declared spend — Argus then logs and
-    lets it through, rather than breaking unrelated agents.
+    Returns None when the call isn't a declared spend.
     """
     if not isinstance(args, dict):
         return None
@@ -65,11 +80,42 @@ def _extract_declaration(
     )
 
 
+def _extract_stripe_args(args: Dict[str, Any]) -> Tuple[Optional[str], Optional[float], Optional[str]]:
+    """For stripe_* tool calls, dig out the auth token + amount + job_id from
+    typical Stripe API argument shapes."""
+    if not isinstance(args, dict):
+        return None, None, None
+    metadata = args.get("metadata") if isinstance(args.get("metadata"), dict) else {}
+    token = metadata.get("argus_auth_token") or args.get("argus_auth_token")
+    job_id = metadata.get("job_id") or args.get("job_id")
+
+    # Stripe's convention: ``amount`` is always in the smallest currency
+    # unit (cents). Our own ``amount_usd`` / ``projected_usd`` are dollars
+    # as float. Disambiguate by arg name, not magnitude.
+    amount_usd: Optional[float] = None
+    if "amount_usd" in args:
+        try:
+            amount_usd = float(args["amount_usd"])
+        except (TypeError, ValueError):
+            amount_usd = None
+    elif "projected_usd" in args:
+        try:
+            amount_usd = float(args["projected_usd"])
+        except (TypeError, ValueError):
+            amount_usd = None
+    elif "amount" in args:
+        try:
+            amount_usd = float(args["amount"]) / 100.0  # Stripe cents
+        except (TypeError, ValueError):
+            amount_usd = None
+
+    return token, amount_usd, (str(job_id) if job_id else None)
+
+
 def _build_snapshot(decl: policy.SpendDeclaration) -> Tuple[policy.BudgetSnapshot, list]:
     budgets = _cfg.load_budgets()
     budget = budgets.get(decl.cost_center_id) or budgets.get("default")
     if budget is None:
-        # No config at all — fall back to a permissive snapshot.
         return (
             policy.BudgetSnapshot(
                 cost_center_id=decl.cost_center_id,
@@ -80,8 +126,6 @@ def _build_snapshot(decl: policy.SpendDeclaration) -> Tuple[policy.BudgetSnapsho
             ),
             [],
         )
-    # For the demo, attribute every job to the matched cost center directly.
-    # Future: derive job→cc mapping from cost_centers.yaml.
     spent = db.get_cost_center_spent(budget.cost_center_id, [decl.job_id])
     snap = policy.BudgetSnapshot(
         cost_center_id=budget.cost_center_id,
@@ -94,7 +138,6 @@ def _build_snapshot(decl: policy.SpendDeclaration) -> Tuple[policy.BudgetSnapsho
 
 
 def _wait_for_decision(req_id: str, *, timeout: float, poll: float) -> str:
-    """Poll the approvals table until status leaves 'pending', or timeout."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status = db.get_approval_status(req_id)
@@ -105,25 +148,18 @@ def _wait_for_decision(req_id: str, *, timeout: float, poll: float) -> str:
     return "timeout"
 
 
-def on_pre_tool_call(tool_name: str, args: Dict[str, Any], task_id: str, **_: Any):
-    """Hermes pre_tool_call callback. Returns None to allow, dict to block."""
-    if not _is_spend_call(tool_name):
-        return None
-
-    decl = _extract_declaration(tool_name, args or {})
-    if decl is None:
-        db.log_audit(
-            "system",
-            "spend_skipped_missing_declaration",
-            {"tool": tool_name, "task_id": task_id},
-        )
-        return None
-
+def _process_declaration(
+    decl: policy.SpendDeclaration, task_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Run a declaration through Policy + Enforcement. Returns
+    (block_response, allow_metadata). On ALLOW the auth token is in the
+    second tuple element; the caller (HTTP route) can hand it back to the
+    agent."""
     snap, _ = _build_snapshot(decl)
     decision = policy.decide(decl, snap)
 
     audit_payload = {
-        "tool": tool_name,
+        "tool": decl.tool_name,
         "task_id": task_id,
         "job_id": decl.job_id,
         "cost_center_id": decl.cost_center_id,
@@ -134,30 +170,39 @@ def on_pre_tool_call(tool_name: str, args: Dict[str, Any], task_id: str, **_: An
     db.log_audit("system", "spend_evaluated", audit_payload)
 
     if not decision.needs_approval:
-        # The declaration tool is the gate; the actual stripe_* call that
-        # follows is what moves money. For the demo path, record the intent.
-        if tool_name == _DECL_TOOL:
-            db.insert_ledger_row(
-                job_id=decl.job_id,
-                kind="external_spend",
-                amount_usd=decl.projected_usd,
-                source="argus_declaration",
-                ref=decl.ref,
-                session_id=task_id or None,
-            )
-        return None
+        token = db.issue_auth_token(
+            job_id=decl.job_id,
+            cost_center_id=decl.cost_center_id,
+            amount_usd=decl.projected_usd,
+            ttl_seconds=AUTH_TOKEN_TTL_SEC,
+            tolerance_pct=AUTH_TOKEN_TOLERANCE,
+        )
+        db.log_audit(
+            "system", "auth_token_issued",
+            {"job_id": decl.job_id, "amount_usd": decl.projected_usd,
+             "ttl_sec": AUTH_TOKEN_TTL_SEC, "verdict": "ALLOW"},
+        )
+        # Declaration auto-approved → record the intent (sim path).
+        db.insert_ledger_row(
+            job_id=decl.job_id,
+            kind="external_spend",
+            amount_usd=decl.projected_usd,
+            source="argus_declaration",
+            ref=decl.ref,
+            session_id=task_id or None,
+        )
+        return None, token
 
     req_id = db.create_approval_request(
         job_id=decl.job_id,
         cost_center_id=decl.cost_center_id,
         projected_usd=decl.projected_usd,
         level=decision.level or "finance",
-        tool_name=tool_name,
+        tool_name=decl.tool_name,
         ref=decl.ref,
     )
     db.log_audit(
-        "system",
-        "approval_requested",
+        "system", "approval_requested",
         {**audit_payload, "approval_id": req_id, "level": decision.level},
     )
 
@@ -166,18 +211,134 @@ def on_pre_tool_call(tool_name: str, args: Dict[str, Any], task_id: str, **_: An
     )
 
     if status == "approved":
-        if tool_name == _DECL_TOOL:
-            db.insert_ledger_row(
-                job_id=decl.job_id,
-                kind="external_spend",
-                amount_usd=decl.projected_usd,
-                source="argus_declaration",
-                ref=decl.ref,
-                session_id=task_id or None,
-            )
+        token = db.issue_auth_token(
+            job_id=decl.job_id,
+            cost_center_id=decl.cost_center_id,
+            amount_usd=decl.projected_usd,
+            ttl_seconds=AUTH_TOKEN_TTL_SEC,
+            tolerance_pct=AUTH_TOKEN_TOLERANCE,
+            approval_id=req_id,
+        )
+        db.log_audit(
+            "system", "auth_token_issued",
+            {"approval_id": req_id, "job_id": decl.job_id,
+             "amount_usd": decl.projected_usd, "ttl_sec": AUTH_TOKEN_TTL_SEC,
+             "verdict": "HUMAN_APPROVED"},
+        )
+        db.insert_ledger_row(
+            job_id=decl.job_id,
+            kind="external_spend",
+            amount_usd=decl.projected_usd,
+            source="argus_declaration",
+            ref=decl.ref,
+            session_id=task_id or None,
+        )
         db.log_audit("system", "spend_resumed", {"approval_id": req_id})
-        return None
+        return None, token
 
     msg = f"Argus blocked spend ({status}): {decision.reason}"
     db.log_audit("system", f"spend_{status}", {"approval_id": req_id})
-    return {"action": "block", "message": msg}
+    return {"action": "block", "message": msg}, None
+
+
+def _process_stripe_backstop(
+    tool_name: str, args: Dict[str, Any], task_id: str
+) -> Optional[Dict[str, Any]]:
+    """Backstop enforcement on raw stripe_* tool calls. Requires a valid
+    auth token in args.metadata.argus_auth_token. Without it → BLOCK."""
+    token, amount_usd, job_id = _extract_stripe_args(args or {})
+    audit_base = {
+        "tool": tool_name,
+        "task_id": task_id,
+        "job_id": job_id,
+        "amount_usd": amount_usd,
+        "has_token": bool(token),
+    }
+
+    if not token:
+        db.log_audit("system", "stripe_blocked_no_token", audit_base)
+        return {
+            "action": "block",
+            "message": (
+                "Argus blocked Stripe call: no argus_auth_token in metadata."
+                " Call argus_request_spend first to obtain one."
+            ),
+        }
+
+    if amount_usd is None:
+        db.log_audit("system", "stripe_blocked_no_amount", audit_base)
+        return {
+            "action": "block",
+            "message": "Argus blocked Stripe call: amount not detected in args.",
+        }
+
+    check = db.validate_and_consume_auth_token(
+        token,
+        actual_amount_usd=amount_usd,
+        actual_job_id=job_id,
+        ref=args.get("idempotency_key") if isinstance(args, dict) else None,
+    )
+
+    if check.valid:
+        db.log_audit(
+            "system", "stripe_authorized",
+            {**audit_base, "token": token[:8] + "...", "amount_usd": amount_usd},
+        )
+        return None  # ALLOW — Hermes proceeds with the Stripe call
+
+    db.log_audit(
+        "system", "stripe_blocked_bad_token",
+        {**audit_base, "reason": check.reason},
+    )
+    return {
+        "action": "block",
+        "message": f"Argus blocked Stripe call: {check.reason}.",
+    }
+
+
+def on_pre_tool_call(tool_name: str, args: Dict[str, Any], task_id: str, **_: Any):
+    """Hermes pre_tool_call callback. Returns None to allow, dict to block."""
+    if not _is_spend_call(tool_name):
+        return None
+
+    if _is_decl_call(tool_name):
+        decl = _extract_declaration(tool_name, args or {})
+        if decl is None:
+            db.log_audit(
+                "system", "spend_skipped_missing_declaration",
+                {"tool": tool_name, "task_id": task_id},
+            )
+            return {
+                "action": "block",
+                "message": (
+                    "Argus blocked argus_request_spend: missing required args"
+                    " (job_id, projected_usd)."
+                ),
+            }
+        block, _token = _process_declaration(decl, task_id)
+        return block
+
+    # _is_stripe_call(tool_name) — backstop layer
+    return _process_stripe_backstop(tool_name, args or {}, task_id)
+
+
+def process_declaration_for_api(
+    *, job_id: str, cost_center_id: str, projected_usd: float, ref: Optional[str],
+    task_id: str
+) -> Dict[str, Any]:
+    """Helper for plugin_api.py / sim path: runs the declaration and returns
+    a JSON-shaped result {action, [auth_token, expires_in, ...]}."""
+    decl = policy.SpendDeclaration(
+        job_id=job_id,
+        cost_center_id=cost_center_id,
+        projected_usd=projected_usd,
+        tool_name=_DECL_TOOL,
+        ref=ref,
+    )
+    block, token = _process_declaration(decl, task_id)
+    if block is not None:
+        return block
+    out: Dict[str, Any] = {"action": "allow"}
+    if token:
+        out.update(token)
+    return out

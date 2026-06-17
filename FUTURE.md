@@ -13,6 +13,23 @@
 These close real gaps a judge or early user might raise. They don't
 require redesigning anything in `CLAUDE.md`.
 
+### 0. Stripe Issuing — wire the network-layer enforcement live
+
+**Status:** the Argus side is implemented and tested. `POST
+/webhooks/stripe-issuing-authorization` accepts real
+`issuing_authorization.request` payloads, validates against active
+auth tokens, returns `{"approved": true/false}`. What ships
+post-deadline is the Stripe-side production wiring.
+
+**Why deferred:** Stripe Issuing requires an application + approval
+process that can't be rushed for a hackathon. The endpoint is
+behind it; flipping the switch is operational, not architectural.
+
+**Effort:** ~1 day of operational work + Stripe's approval timeline.
+Apply for Issuing, provision a virtual card per agent, point its
+authorization webhook at Argus, attach the card to the agent's
+Stripe Issuing wallet. Argus's logic does not change.
+
 ### 1. Real-time refund-on-reject (Stripe API)
 
 **Status:** ledger schema supports it (`external_spend` with negative
