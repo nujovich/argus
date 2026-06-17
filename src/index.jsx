@@ -419,7 +419,118 @@ const EVENT_TINT = {
   refund_recorded:            { color: "var(--color-warning, #f59e0b)", label: "refund" },
   webhook_ignored:            { color: "var(--color-muted-foreground)", label: "ignored" },
   spend_skipped_missing_declaration: { color: "var(--color-muted-foreground)", label: "skipped" },
+  // Compute Allocator (Phase 4.5)
+  compute_tier_evaluated:     { color: "var(--color-muted-foreground)", label: "compute eval" },
+  compute_tier_assigned:      { color: "var(--color-success, #16a34a)", label: "⚡ TIER ASSIGNED" },
+  compute_tier_rejected:      { color: "var(--color-destructive)",       label: "⛔ TIER REJECT" },
+  compute_approval_requested: { color: "var(--color-warning, #f59e0b)", label: "compute approval" },
+  compute_resumed:            { color: "var(--color-success, #16a34a)", label: "compute resumed" },
+  compute_request_misconfigured: { color: "var(--color-destructive)",   label: "misconfigured" },
+  compute_tier_downgraded:    { color: "var(--color-warning, #f59e0b)", label: "⚠ DOWNGRADED" },
+  compute_integrity_violation:{ color: "var(--color-destructive)",       label: "🚨 INTEGRITY" },
+  llm_cost_recorded:          { color: "var(--color-muted-foreground)", label: "Nemotron burn" },
 };
+
+// ---------------------------------------------------------------------------
+// Fleet view — Argus allocating compute as capital, per-job
+// ---------------------------------------------------------------------------
+
+function TierBadge({ tier }) {
+  const t = (tier || "").toLowerCase();
+  const map = {
+    ultra:       { text: "⚡ ULTRA",   bg: "linear-gradient(90deg, #7c3aed, #06b6d4)" },
+    base:        { text: "BASE",       bg: "var(--color-muted)" },
+    reject:      { text: "⛔ REJECT",  bg: "var(--color-destructive)" },
+    downgraded:  { text: "⚠ DOWNGRADED", bg: "var(--color-warning, #f59e0b)" },
+  };
+  const m = map[t] || { text: tier || "—", bg: "var(--color-muted)" };
+  return (
+    <span style={{
+      background: m.bg, color: "white", padding: "0.15rem 0.6rem",
+      borderRadius: "999px", fontSize: "0.78em", fontWeight: 700,
+      whiteSpace: "nowrap",
+    }}>{m.text}</span>
+  );
+}
+
+function BurnBar({ ratio, budget, burn }) {
+  const r = Math.max(0, Math.min(1.3, Number(ratio || 0)));
+  const pct = Math.min(100, r * 100);
+  const color = r > 1 ? "var(--color-destructive)"
+              : r > 0.7 ? "var(--color-warning, #f59e0b)"
+              : "var(--color-success, #16a34a)";
+  return (
+    <div style={{ minWidth: "140px" }}>
+      <div style={{ fontSize: "0.78em", color: "var(--color-muted-foreground)" }}>
+        {fmtUsd(burn)} / {fmtUsd(budget)} ({(r * 100).toFixed(0)}%)
+      </div>
+      <div style={{ height: "6px", background: "var(--color-border)", borderRadius: "3px", marginTop: "2px" }}>
+        <div style={{
+          height: "100%", width: `${pct}%`, background: color,
+          borderRadius: "3px", transition: "width 0.5s ease, background 0.3s ease",
+        }} />
+      </div>
+    </div>
+  );
+}
+
+function ComputeFleet({ fleet }) {
+  const items = fleet?.items || [];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Compute fleet — Argus allocating GPU as capital</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {items.length === 0 ? (
+          <p style={{ color: "var(--color-muted-foreground)" }}>
+            No compute allocations yet. Click <strong>▶ Run AI Services Firm</strong> below to fan out three jobs across the allocator.
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            {items.map((it) => (
+              <div key={it.job_id} className="argus-slide-in"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1.6fr 0.8fr 1.6fr 1.4fr",
+                  gap: "0.6rem", alignItems: "center",
+                  padding: "0.6rem 0.8rem",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: "var(--radius)",
+                  background: it.tier === "reject" ? "rgba(220,38,38,0.06)" : "transparent",
+                }}>
+                <div>
+                  <div style={{ fontWeight: 600 }}>{it.job_id}</div>
+                  <div style={{ fontSize: "0.75em", color: "var(--color-muted-foreground)", fontFamily: "monospace" }}>
+                    {it.cost_center_id} · {it.model || "—"}
+                  </div>
+                </div>
+                <TierBadge tier={it.tier} />
+                {it.tier === "reject" ? (
+                  <span style={{ color: "var(--color-destructive)", fontSize: "0.85em" }}>
+                    Not authorized — margin would be negative
+                  </span>
+                ) : (
+                  <BurnBar ratio={it.burn_ratio} budget={it.compute_budget_usd} burn={it.actual_burn_usd} />
+                )}
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "0.75em", color: "var(--color-muted-foreground)" }}>margin</div>
+                  <div style={{ fontWeight: 700,
+                    color: (it.current_margin_usd ?? 0) >= 0
+                      ? "var(--color-success, #16a34a)"
+                      : "var(--color-destructive)",
+                  }}>
+                    {fmtUsd(it.current_margin_usd)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function AuditSection() {
   const { data, error } = usePolling("/api/plugins/argus/audit?limit=40", FAST_POLL_MS);
@@ -482,13 +593,13 @@ function AuditSection() {
 // Start commission button — runs the whole Mermelada flow from the browser
 // ---------------------------------------------------------------------------
 
-function StartCommissionButton() {
-  const [running, setRunning] = useState(false);
+function DemoControls() {
+  const [running, setRunning] = useState(null);
   const [error, setError] = useState(null);
-  const start = async () => {
-    setRunning(true); setError(null);
+  const run = async (path, label) => {
+    setRunning(label); setError(null);
     try {
-      await SDK.fetchJSON("/api/plugins/argus/demo/mermelada/run", {
+      await SDK.fetchJSON(`/api/plugins/argus/demo/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
@@ -496,11 +607,11 @@ function StartCommissionButton() {
     } catch (e) {
       setError(String(e));
     } finally {
-      setRunning(false);
+      setRunning(null);
     }
   };
   const reset = async () => {
-    if (!confirm("Wipe ledger + approvals + audit + tokens? (re-anchors latest Nemotron session)")) return;
+    if (!confirm("Wipe ledger + approvals + audit + tokens + compute allocations? (re-anchors latest Nemotron session)")) return;
     try {
       await SDK.fetchJSON("/api/plugins/argus/demo/reset", {
         method: "POST",
@@ -514,18 +625,21 @@ function StartCommissionButton() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Start a Mermelada commission</CardTitle>
+        <CardTitle>Demo controls</CardTitle>
       </CardHeader>
       <CardContent>
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-          <Button onClick={start} disabled={running}>
-            {running ? "⏳ Commission in progress — approve in queue above" : "▶ Start commission"}
+        <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
+          <Button onClick={() => run("ai-services-firm/run", "firm")} disabled={!!running}>
+            {running === "firm" ? "⏳ Allocating compute…" : "▶ Run AI Services Firm"}
           </Button>
-          <Button variant="destructive" onClick={reset} disabled={running}>
-            ↺ Reset demo
+          <Button onClick={() => run("mermelada/run", "mermelada")} disabled={!!running}>
+            {running === "mermelada" ? "⏳ In progress…" : "▶ Run Mermelada commission"}
           </Button>
-          <span style={{ color: "var(--color-muted-foreground)", fontSize: "0.85em" }}>
-            Reset wipes the ledger and re-anchors the latest Nemotron session.
+          <Button variant="destructive" onClick={reset} disabled={!!running}>
+            ↺ Reset
+          </Button>
+          <span style={{ color: "var(--color-muted-foreground)", fontSize: "0.8em" }}>
+            AI Services Firm = three jobs through the compute allocator (Ultra / Base / Reject). Mermelada = the cash-side commission demo.
           </span>
         </div>
         {error && <Badge variant="destructive" style={{ marginTop: "0.5rem" }}>error: {error}</Badge>}
@@ -542,8 +656,8 @@ function ArgusPage() {
   useAnimationsCSS();
   const { data: pnlData } = usePolling("/api/plugins/argus/pnl", POLL_MS);
   const { data: tokenData } = usePolling("/api/plugins/argus/tokens/active", FAST_POLL_MS);
+  const { data: fleetData } = usePolling("/api/plugins/argus/compute/fleet", POLL_MS);
   const { data: auditDataForStages } = usePolling("/api/plugins/argus/audit?limit=200", POLL_MS);
-  // Stage statuses are derived from audit history (oldest-first scan).
   const stageStatuses = useMemo(() => {
     const items = (auditDataForStages?.items || []).slice().reverse();
     return deriveStageStatus(items);
@@ -551,11 +665,12 @@ function ArgusPage() {
 
   return (
     <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
-      <WorkflowTimeline statuses={stageStatuses} />
-      <StartCommissionButton />
+      <ComputeFleet fleet={fleetData} />
+      <DemoControls />
       <PnLSummary pnlData={pnlData} />
       <ApprovalsSection />
       <TokenVault tokens={tokenData} />
+      <WorkflowTimeline statuses={stageStatuses} />
       <AuditSection />
     </div>
   );

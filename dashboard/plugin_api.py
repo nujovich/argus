@@ -445,6 +445,89 @@ async def run_mermelada_demo() -> dict:
     return {"status": "completed", "outcomes": outcomes}
 
 
+@router.post("/demo/ai-services-firm/run")
+async def run_ai_services_firm_demo() -> dict:
+    """Drive the AI services firm demo end-to-end from the dashboard.
+    Three jobs with different margin profiles flow through the compute
+    allocator: premium research → Ultra, thin-margin generation → Base
+    (after self-correct), negative-margin vanity research → Reject.
+    No terminal needed."""
+    import hook as _hook
+    import anyio
+
+    def _flow():
+        outcomes = []
+
+        # ---- Job A: premium research ($200 revenue, $15 burn) ----
+        a = _hook.process_compute_request_for_api(
+            job_id="research-enterprise-001",
+            cost_center_id="ai_research",
+            expected_revenue_usd=200.0,
+            projected_burn_usd=15.0,
+            ref="competitor_landscape_q3",
+            task_id="dashboard-demo-a",
+        )
+        outcomes.append({"job": "research-enterprise-001", "compute": a})
+        db.insert_ledger_row(
+            job_id="research-enterprise-001", kind="revenue",
+            amount_usd=200.0, source="stripe",
+            ref="pi_sim_research_001",
+        )
+        db.log_audit("stripe", "revenue_received",
+                     {"job_id": "research-enterprise-001", "amount_usd": 200.0})
+        # Simulate actual Nemotron Ultra burn ~$14.80
+        db.insert_ledger_row(
+            job_id="research-enterprise-001", kind="llm_cost",
+            amount_usd=14.80, source="sim_llm",
+            ref="nemotron_ultra_session_a",
+        )
+        db.log_audit("system", "llm_cost_recorded",
+                     {"job_id": "research-enterprise-001", "amount_usd": 14.80,
+                      "ref": "nemotron_ultra_session_a"})
+
+        # ---- Job B: low margin → self-correct to base ----
+        b1 = _hook.process_compute_request_for_api(
+            job_id="gen-tweet-042", cost_center_id="ai_generation",
+            expected_revenue_usd=3.0, projected_burn_usd=5.0,
+            ref="viral_tweet", task_id="dashboard-demo-b",
+        )
+        outcomes.append({"job": "gen-tweet-042 (over-spec)", "compute": b1})
+        # Agent self-corrects with smaller burn
+        b2 = _hook.process_compute_request_for_api(
+            job_id="gen-tweet-042", cost_center_id="ai_generation",
+            expected_revenue_usd=3.0, projected_burn_usd=0.30,
+            ref="viral_tweet_v2", task_id="dashboard-demo-b",
+        )
+        outcomes.append({"job": "gen-tweet-042 (self-corrected)", "compute": b2})
+        db.insert_ledger_row(
+            job_id="gen-tweet-042", kind="revenue",
+            amount_usd=3.0, source="stripe", ref="pi_sim_gen_042",
+        )
+        db.log_audit("stripe", "revenue_received",
+                     {"job_id": "gen-tweet-042", "amount_usd": 3.0})
+        db.insert_ledger_row(
+            job_id="gen-tweet-042", kind="llm_cost",
+            amount_usd=0.28, source="sim_llm",
+            ref="nemotron_base_session_b",
+        )
+        db.log_audit("system", "llm_cost_recorded",
+                     {"job_id": "gen-tweet-042", "amount_usd": 0.28,
+                      "ref": "nemotron_base_session_b"})
+
+        # ---- Job C: vanity research → reject ----
+        c = _hook.process_compute_request_for_api(
+            job_id="research-vanity-099", cost_center_id="ai_research",
+            expected_revenue_usd=2.0, projected_burn_usd=20.0,
+            ref="vanity_lookup", task_id="dashboard-demo-c",
+        )
+        outcomes.append({"job": "research-vanity-099", "compute": c})
+
+        return outcomes
+
+    outcomes = await anyio.to_thread.run_sync(_flow)
+    return {"status": "completed", "outcomes": outcomes}
+
+
 @router.post("/demo/reset")
 async def demo_reset() -> dict:
     """Wipe the demo state so the dashboard is clean for the next take.
