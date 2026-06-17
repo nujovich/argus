@@ -7,51 +7,76 @@
 
 ## Tagline (≤ 100 chars)
 
-**We gave a Hermes agent a wallet. Argus made sure it didn't blow up.**
+**Stripe gives the wallet. NemoClaw isolates the process. Argus governs the money.**
 
 ---
 
 ## The hook — what a judge sees first
 
-> We gave a Hermes agent on Nemotron 3 Ultra a `$50` budget and three
-> jobs: buy API calls, provision a SaaS database, top up some NIM
-> credits. We told it to optimize for profit.
+> Meet **Mermelada Studio** — a Hermes agent that runs a paid
+> social-design business. A customer pays `$15` for a 3-slide
+> carousel. The agent spends real Stripe-routed money on image-gen
+> APIs, premium SaaS fonts, and compute. Then it gets greedy and
+> tries to boost reach with ads.
 >
-> The agent made **38 spend decisions** in five minutes.
+> Mermelada Studio makes **7 spend decisions** in five minutes.
 >
-> Argus auto-approved 32 micro-charges. It paused the agent on 4
-> medium-sized ones and asked us. It blocked 2 finance-tier purchases
-> until a human said yes. When we rejected one of them, the agent saw
-> the block, **decided on its own to retry at a smaller amount**, and
-> kept going.
+> Argus auto-approves 4 micro-charges in image-gen + compute. It
+> pauses the agent on a `$40` SaaS provisioning attempt and asks the
+> human. The human rejects → **the agent self-corrects and retries
+> at `$5`**, which Argus then escalates again, the human approves,
+> the agent proceeds. When Mermelada then tries to spend `$25` on a
+> marketing boost — a denied category for this engagement — Argus
+> blocks at the network layer. The agent receives the block message
+> and stops.
 >
-> Net: `$154` revenue, `$90` spent (including `$0.01` of Nemotron token
-> cost auto-joined from `hermes-telemetry`), `+$63.89` P&L. Zero
-> runaway charges. Full audit trail of who approved what.
+> Net: `$15` revenue, `~$8` spent (including Nemotron token cost
+> auto-joined from `hermes-telemetry`), `+$7` margin. Zero runaway
+> charges. Full audit trail of every decision.
 >
-> **That's what production-grade agentic commerce looks like.**
+> Mermelada is one agent. **Argus is the infrastructure that any agent
+> with a wallet needs.**
 
 ![Argus dashboard — final P&L of the three-job demo](docs/pnl-final.webp)
 
 ---
 
-## Why this matters
+## Why this matters — and the competitive moat
 
 Hermes 0.16 ships **Stripe Skills**: agents can now buy things,
 provision SaaS, pay per-call APIs. This is huge. It is also the
 moment finance teams say *"absolutely not."*
 
-Stripe's per-action `$/call` limit is a static ceiling. Fine for
-prototypes. Useless for the enterprise question of *"how much have we
-spent on this initiative this quarter, and who approved it?"*
+There's already competition in budget governance for agents — and
+that's exactly why Argus's framing matters:
 
-Every other agent-with-money pitch in this hackathon — OpsForge giving
-agents `$100`, Distill paying agents to do work — needs a control
-plane underneath. They either hardcoded it (and it breaks at scale) or
-hand-waved it (and CFOs won't ship to prod).
+| Competitor | Domain | Granularity | What Argus does differently |
+|---|---|---|---|
+| **PipRail** | crypto (x402, EVM/Solana) | per-transaction cap | We govern **fiat** through Stripe Skills, with **portfolio-level** policy (per-txn isn't enough — `$5/txn` doesn't stop 200 micro-charges) |
+| **42-evey** | token cost in agents | LLM-only | We unify **token cost + fiat spend** in one P&L — the only place where Nemotron pricing and Stripe charges share a ledger |
+| **Hardcoded inside OpsForge/Distill/etc.** | bespoke | one agent | Argus is **reusable infra**. Drop it in once, every agent on the box is governed. |
 
-**Argus is that control plane**. It's a Hermes plugin. It sits in the
-`pre_tool_call` hook. It meters, tracks, and gates every dollar.
+**Nobody else is doing fiat governance on Stripe Skills with portfolio
+policy + human escalation + unified token+fiat P&L.** That's the gap.
+And we close it with continuity: Argus is positioned as the spend-
+gobierno upgrade to `hermes-telemetry` (a plugin the community
+already uses — author is the same).
+
+---
+
+## Three policy verdicts in one demo
+
+The Mermelada Studio spend pattern naturally exercises all three Argus
+verdict modes:
+
+| Verdict | Beat | Example spend |
+|---|---|---|
+| **ALLOW** (auto-approve) | Green / silent | 3× $0.30 image-gen calls |
+| **NEEDS_APPROVAL_MANAGER** (escalate) | Yellow — human in the loop | $40 premium fonts → reject → $5 standard fonts → approve |
+| **HARD BLOCK** (denied category) | Red — full stop | $25 ads boost (marketing is denied for this engagement) |
+
+That's three distinct governance outcomes in the same 5-minute
+commission. No other hackathon entry shows all three.
 
 ---
 
@@ -188,55 +213,74 @@ The brief lists three NVIDIA capabilities. We're honest about each:
 
 ---
 
-## Demo — the deterministic version and the agent-driven version
+## Demo — Mermelada Studio on Argus
 
-We ship two ways to run the same flow:
+We ship one reference agent (**Mermelada Studio**) on top of Argus, in
+two runnable forms. Both use the same Argus plugin install + the same
+`cost_centers.yaml`; the difference is whether the spend decisions
+come from a deterministic driver or a live Nemotron-driven loop.
 
-### `scripts/demo.py` — deterministic, for the recorded video
+### `examples/mermelada-studio/mermelada_demo.py` — deterministic
 
-Walks an operator through three unrelated jobs (`job-a-api`,
-`job-b-saas`, `job-c-services`), blocking on each approval pause so
-the operator can decide in the dashboard. Final P&L matches the
-screenshot above. Recipe in `DEMO.md`.
+Walks the operator through one commission: customer pays `$15`,
+agent generates art (3 micro + 1 hero), provisions fonts (`$40`
+reject → `$5` retry approve), renders, tries `$25` ads boost (block).
+Each stage prints what's happening and what to click in the dashboard.
 
-### Live Hermes agent — for the wow moment
+```bash
+cd ~/argus
+cp examples/mermelada-studio/cost_centers.yaml ~/.hermes/argus/cost_centers.yaml
+export HERMES_DASHBOARD_SESSION_TOKEN=argus-demo
+python3 examples/mermelada-studio/mermelada_demo.py
+```
 
-A real Hermes session running on Nemotron 3 Ultra calls
-`argus_request_spend(...)` for each spend it wants to make. The hook
-gates it. The agent receives the block as an error and self-corrects.
-The screencast captures the agent making the retry decision in real
-time. See `DEMO.md §5` for setup.
+### Live Hermes agent — the wow moment
 
-The deterministic script is what we used to reach the screenshot
-above. The live agent path is the production shape — Argus's hook
-fires identically.
+A real Hermes session on Nemotron 3 Ultra loaded with both
+`argus-request-spend` and the existing `mermelada-social-design`
+skills. The agent reads the commission brief, decides what to spend
+on, calls `argus-request-spend` before each spend, and self-corrects
+when blocked. The screencast captures the agent making retry
+decisions in real time.
+
+Both paths fire the same hook (`hook.on_pre_tool_call`). The
+deterministic path is just `/sim/spend` invoking the same code with
+`task_id="sim"`. The live path threads the agent's real Hermes
+session_id, which is what makes Nemotron token cost auto-join into
+the LLM column of the P&L.
+
+See [`examples/mermelada-studio/README.md`](./examples/mermelada-studio/README.md)
+for the full setup and `DEMO.md` for the base Argus install.
 
 ---
 
 ## Why it matters / what's next
 
-The hackathon brief asked for "business tooling on top of Stripe
-Skills + NVIDIA agents." Most submissions interpreted "business
-tooling" vertically — one industry, one agent, one product. We went
-horizontally. Argus is the **control plane every vertical needs**
-before they let their agent touch the wallet.
+Hermes + Stripe Skills just put agents into the wallet. Nothing else
+does. But no enterprise CFO will hand that wallet over without
+controls. **Argus is the missing layer** between "agent that can
+spend" and "agent that the business authorizes to spend."
 
-OpsForge giving an agent `$100` to run a business needs Argus
-underneath. Distill paying one agent to hire another needs Argus
-underneath. DevPulse automating ops needs Argus underneath. We're the
-layer that makes their pitches real instead of demos.
+Closing line for the screencast:
+
+> **Stripe gives the wallet. NemoClaw isolates the process. Argus
+> governs the money. Run it on DGX Spark.**
 
 Post-deadline roadmap lives in [`FUTURE.md`](./FUTURE.md), organised
 by tier:
 
-- **Tier 1** (real gaps): refund-on-reject via Stripe API, NemoClaw
-  routing verification, more agent skills.
-- **Tier 2** (polish): SSE in place of polling, cost-center editor,
-  soft-threshold warnings, audit search.
-- **Tier 3** (bigger swings): multi-tenant per-org budgets, cross-job
+- **Tier 1 (real gaps):** Stripe Issuing **defense-in-depth layer**
+  (virtual card + authorization webhook → enforcement at the card
+  network, not just the agent runtime — the line that makes a CFO
+  sign), refund-on-reject via Stripe API, NemoClaw routing
+  verification.
+- **Tier 2 (polish):** SSE in place of polling, cost-center editor,
+  soft-threshold warnings, policy-level denied-categories, audit
+  search.
+- **Tier 3 (bigger swings):** multi-tenant per-org budgets, cross-job
   revenue attribution, recurring/subscription spends, spend
   forecasting.
-- **Tier 4** (explicitly NOT doing): Postgres rewrite, React framework
+- **Tier 4 (explicitly NOT doing):** Postgres rewrite, React framework
   upgrade, Stripe Connect.
 
 The brain (`policy.py`) is a pure function. Everything else is a
