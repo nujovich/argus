@@ -1,0 +1,14 @@
+{
+  "name": "argus",
+  "label": "Argus",
+  "description": "Financial control plane — P&L, approvals, audit trail.",
+  "icon": "Eye",
+  "version": "0.0.1",
+  "tab": {
+    "path": "/argus",
+    "position": "end"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}
