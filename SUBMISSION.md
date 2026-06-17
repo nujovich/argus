@@ -138,18 +138,35 @@ wiring** uses it. We deliver all three:
 
 ## Stripe pillar
 
-- TEST mode end-to-end (CLAUDE.md §10).
-- Revenue ingestion: `POST /api/plugins/argus/webhooks/stripe` accepts
-  `payment_intent.succeeded` and `charge.refunded`. The demo drives
-  this via simulated payloads; production swap is a Stripe CLI
-  `stripe trigger ...` away.
-- Spend gating: `argus_request_spend(job_id, projected_usd,
+- **TEST mode end-to-end with the real Stripe API.** The
+  `POST /api/plugins/argus/webhooks/stripe` endpoint accepts both the
+  flatter sim payloads the demo script uses and Stripe's actual
+  envelope (nested `data.object`, cents as int, `metadata.job_id`).
+- **Round-trip verified** against `stripe trigger payment_intent.succeeded`
+  with `stripe listen --forward-to .../webhooks/stripe -H "Authorization:
+  Bearer ..."`. Argus extracts `metadata.job_id`, converts cents →
+  dollars, and stores the real `pi_...` id as the ledger `ref`. The
+  PaymentIntent remains valid against `stripe payment_intents retrieve`
+  after the fact — proof that this is not synthetic data:
+
+  ```json
+  {
+    "id": "pi_3TjJs8ArkRxfRtnB06HmYl55",
+    "amount": 2000,
+    "status": "succeeded",
+    "livemode": false,
+    "metadata": { "job_id": "job-b-saas" }
+  }
+  ```
+
+- **Spend gating:** `argus_request_spend(job_id, projected_usd,
   cost_center_id, ref)` is the explicit declaration the agent calls
   before any Stripe charge; `stripe_*` tool calls are also intercepted
   as a backstop.
-- Refund schema (negative `external_spend`) is in place; the call to
-  `stripe.Refund.create()` is documented as Phase 5 since the gated
-  path means spends are blocked **before** settlement, not after.
+- **Refunds:** schema (`external_spend` with negative amount) and the
+  `charge.refunded` webhook path are in place. The call to
+  `stripe.Refund.create()` from inside the rejection path is Phase 5
+  since the gated flow blocks spends **before** settlement.
 
 ---
 
