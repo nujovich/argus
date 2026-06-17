@@ -6,10 +6,15 @@ Horizontal financial control plane for money-spending Hermes agents.
 Meters every dollar in/out per job, tracks live P&L, and gates Stripe
 spends through a human-in-the-loop approval flow.
 
-**Status:** Phase 3 — ledger, pure policy, `pre_tool_call` Capture +
-Enforcement hook, and the dashboard UI (P&L, approval queue, audit
-trail) are all live. Stripe Skills wiring + the three-job demo script
-land in Phase 4. Full design in [`CLAUDE.md`](./CLAUDE.md).
+**Status:** Phase 4 — demo ready. Ledger, pure policy, `pre_tool_call`
+Capture + Enforcement hook, dashboard (P&L, approval queue, audit
+trail), and a three-job deterministic demo driver are all live. See
+[`DEMO.md`](./DEMO.md) for the reproducible recipe; full design in
+[`CLAUDE.md`](./CLAUDE.md).
+
+> Argus gates spend regardless of what the agent does — the demo shows
+> it governing three Hermes agents running on Nemotron 3 Ultra through
+> NemoClaw, each touching different NVIDIA / SaaS / Stripe surfaces.
 
 ## Tests
 

@@ -1,0 +1,49 @@
+# Argus cost-center / budget config — DEMO TUNING.
+#
+# These three centers are calibrated to the demo script in scripts/demo.py.
+# Drop this file (or a copy) at ~/.hermes/argus/cost_centers.yaml on the
+# demo machine; the plugin loads it on every Policy snapshot.
+#
+# Routing tiers per cost center:
+#   projected_usd ≤ auto_approve_under_usd → auto-approve
+#   projected_usd ≤ manager_under_usd       → manager approval
+#   otherwise                                → finance approval
+#
+# Hard cap: if current_spent + projected_usd would exceed limit_usd, the
+# request is always routed to finance regardless of tier.
+
+cost_centers:
+  # Pay-per-call API job — many tiny charges, plus an occasional burst that
+  # needs manager review. Tuned so $0.02 auto-approves and a $10 burst routes.
+  api_calls:
+    label: "Pay-per-call APIs"
+    limit_usd: 25.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 0.50
+    manager_under_usd: 5.0
+
+  # SaaS provisioning — single large up-front spend. No auto-approve; the
+  # demo's $79 charge intentionally routes to finance for the climactic
+  # human-in-the-loop beat.
+  saas:
+    label: "SaaS provisioning"
+    limit_usd: 200.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 0.0
+    manager_under_usd: 50.0
+
+  # One-off service purchases (third-party APIs, NVIDIA NIM inference, etc).
+  # Medium budget, manager-tier for the demo's $7 charge.
+  services:
+    label: "One-off services & NIMs"
+    limit_usd: 50.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0
+
+  # Default fallback when an agent doesn't declare a cost_center_id.
+  default:
+    label: "Default"
+    limit_usd: 50.0
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0
