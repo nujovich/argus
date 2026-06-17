@@ -126,6 +126,30 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             consumed_by_ref TEXT
         );
         CREATE INDEX IF NOT EXISTS auth_tokens_expires_idx ON auth_tokens(expires_at);
+
+        -- Compute Allocator (Phase 4.5): the per-job record of which
+        -- Nemotron tier was assigned, what budget, and the live state.
+        -- See CLAUDE.md §2 / §3.2 / §3.3.
+        CREATE TABLE IF NOT EXISTS compute_allocations (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts              TEXT NOT NULL,
+            job_id          TEXT NOT NULL,
+            cost_center_id  TEXT NOT NULL,
+            tier            TEXT NOT NULL CHECK (tier IN ('ultra','base','reject')),
+            model           TEXT NOT NULL,
+            compute_budget_usd  REAL NOT NULL,
+            expected_revenue_usd REAL,
+            expected_margin_usd  REAL,
+            status          TEXT NOT NULL CHECK (status IN
+                              ('active','downgraded','killed','done')),
+            downgrade_reason TEXT,
+            session_id      TEXT,
+            auth_token      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS compute_alloc_job_idx
+            ON compute_allocations(job_id);
+        CREATE INDEX IF NOT EXISTS compute_alloc_status_idx
+            ON compute_allocations(status);
         """
     )
 
@@ -328,6 +352,96 @@ def get_active_token_count() -> int:
         (_now(),),
     ).fetchone()
     return int(row["c"] or 0)
+
+
+# ---------------------------------------------------------------------------
+# Compute Allocator (Phase 4.5)
+# ---------------------------------------------------------------------------
+
+
+def insert_compute_allocation(
+    *,
+    job_id: str,
+    cost_center_id: str,
+    tier: str,
+    model: str,
+    compute_budget_usd: float,
+    expected_revenue_usd: Optional[float],
+    expected_margin_usd: Optional[float],
+    session_id: Optional[str] = None,
+    auth_token: Optional[str] = None,
+) -> int:
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO compute_allocations(ts, job_id, cost_center_id, tier,"
+        " model, compute_budget_usd, expected_revenue_usd, expected_margin_usd,"
+        " status, session_id, auth_token)"
+        " VALUES(?,?,?,?,?,?,?,?, ?, ?, ?)",
+        (
+            _now(), job_id, cost_center_id, tier, model,
+            float(compute_budget_usd),
+            expected_revenue_usd,
+            expected_margin_usd,
+            "active" if tier != "reject" else "killed",
+            session_id, auth_token,
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def get_compute_allocations(job_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    conn = _get_conn()
+    if job_id:
+        rows = conn.execute(
+            "SELECT * FROM compute_allocations WHERE job_id=? ORDER BY id DESC",
+            (job_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM compute_allocations ORDER BY id DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_latest_active_allocation(job_id: str) -> Optional[Dict[str, Any]]:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM compute_allocations WHERE job_id=? AND status='active'"
+        " ORDER BY id DESC LIMIT 1",
+        (job_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def update_allocation_status(alloc_id: int, status: str,
+                             downgrade_reason: Optional[str] = None) -> None:
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE compute_allocations SET status=?, downgrade_reason=COALESCE(?, downgrade_reason)"
+        " WHERE id=?",
+        (status, downgrade_reason, alloc_id),
+    )
+
+
+def get_job_burn(job_id: str) -> float:
+    """Sum of llm_cost rows for a given job. Used by the throttle check."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount_usd), 0.0) AS s FROM ledger"
+        " WHERE kind='llm_cost' AND job_id=?",
+        (job_id,),
+    ).fetchone()
+    return float(row["s"] or 0.0)
+
+
+def get_job_revenue(job_id: str) -> float:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount_usd), 0.0) AS s FROM ledger"
+        " WHERE kind='revenue' AND job_id=?",
+        (job_id,),
+    ).fetchone()
+    return float(row["s"] or 0.0)
 
 
 # ---------------------------------------------------------------------------

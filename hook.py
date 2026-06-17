@@ -342,3 +342,163 @@ def process_declaration_for_api(
     if token:
         out.update(token)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Compute Allocator entrypoint (Phase 4.5)
+# ---------------------------------------------------------------------------
+
+
+def _build_compute_snapshot(
+    decl: policy.ComputeDeclaration,
+) -> Optional[policy.ComputeSnapshot]:
+    budgets = _cfg.load_budgets()
+    budget = budgets.get(decl.cost_center_id) or budgets.get("default")
+    if budget is None or budget.ultra_model is None or budget.base_model is None:
+        return None
+    return policy.ComputeSnapshot(
+        cost_center_id=budget.cost_center_id,
+        ultra_model=budget.ultra_model,
+        base_model=budget.base_model,
+        ultra_min_revenue_usd=budget.ultra_min_revenue_usd or 0.0,
+        ultra_min_margin_usd=budget.ultra_min_margin_usd or 0.0,
+        reject_below_margin_usd=budget.reject_below_margin_usd or 0.0,
+        monthly_spent_usd=0.0,    # TODO Phase 5: aggregate from ledger
+        monthly_limit_usd=budget.limit_usd,
+    )
+
+
+def process_compute_request_for_api(
+    *,
+    job_id: str,
+    cost_center_id: str,
+    expected_revenue_usd: float,
+    projected_burn_usd: float,
+    ref: Optional[str],
+    task_id: str,
+) -> Dict[str, Any]:
+    """Run a compute-tier declaration through Policy + the allocator.
+
+    Returns JSON with at minimum {action, tier, model, compute_budget_usd}.
+    On ALLOW also returns an auth_token the agent must echo on subsequent
+    Nemotron calls (so compute-integrity inspection can validate them
+    against telemetry.runs).
+    """
+    decl = policy.ComputeDeclaration(
+        job_id=job_id,
+        cost_center_id=cost_center_id,
+        expected_revenue_usd=expected_revenue_usd,
+        projected_burn_usd=projected_burn_usd,
+        tool_name="argus_request_compute",
+        ref=ref,
+    )
+    snap = _build_compute_snapshot(decl)
+    if snap is None:
+        msg = (
+            f"cost_center '{cost_center_id}' has no compute tier config "
+            "(needs ultra_model/base_model and thresholds in cost_centers.yaml)"
+        )
+        db.log_audit(
+            "system", "compute_request_misconfigured",
+            {"job_id": job_id, "cost_center_id": cost_center_id, "reason": msg},
+        )
+        return {"action": "block", "message": f"Argus: {msg}"}
+
+    decision = policy.decide_compute_tier(decl, snap)
+    audit_payload = {
+        "job_id": job_id,
+        "cost_center_id": cost_center_id,
+        "expected_revenue_usd": expected_revenue_usd,
+        "projected_burn_usd": projected_burn_usd,
+        "verdict": decision.verdict,
+        "tier": decision.tier_label,
+        "model": decision.model,
+        "expected_margin_usd": decision.expected_margin_usd,
+        "reason": decision.reason,
+    }
+    db.log_audit("system", "compute_tier_evaluated", audit_payload)
+
+    if decision.is_rejected:
+        db.insert_compute_allocation(
+            job_id=job_id,
+            cost_center_id=cost_center_id,
+            tier="reject",
+            model="",
+            compute_budget_usd=0.0,
+            expected_revenue_usd=expected_revenue_usd,
+            expected_margin_usd=decision.expected_margin_usd,
+            session_id=task_id or None,
+        )
+        db.log_audit(
+            "system", "compute_tier_rejected",
+            {**audit_payload, "tier": "reject"},
+        )
+        return {
+            "action": "block",
+            "message": f"Argus rejected compute: {decision.reason}",
+            "verdict": decision.verdict,
+            "expected_margin_usd": decision.expected_margin_usd,
+        }
+
+    if decision.needs_approval:
+        # Mirror cash flow: enqueue approval, wait synchronously.
+        req_id = db.create_approval_request(
+            job_id=job_id,
+            cost_center_id=cost_center_id,
+            projected_usd=projected_burn_usd,
+            level="manager",
+            tool_name="argus_request_compute",
+            ref=ref,
+        )
+        db.log_audit(
+            "system", "compute_approval_requested",
+            {**audit_payload, "approval_id": req_id},
+        )
+        status = _wait_for_decision(
+            req_id, timeout=APPROVAL_TIMEOUT_SEC, poll=POLL_INTERVAL_SEC,
+        )
+        if status != "approved":
+            db.log_audit("system", f"compute_{status}", {"approval_id": req_id})
+            return {
+                "action": "block",
+                "message": f"Argus blocked compute ({status}): {decision.reason}",
+            }
+        db.log_audit("system", "compute_resumed", {"approval_id": req_id})
+
+    # ALLOW path — issue an auth token bound to the assigned compute budget.
+    token = db.issue_auth_token(
+        job_id=job_id,
+        cost_center_id=cost_center_id,
+        amount_usd=decision.compute_budget_usd,
+        ttl_seconds=AUTH_TOKEN_TTL_SEC,
+        tolerance_pct=AUTH_TOKEN_TOLERANCE,
+    )
+
+    alloc_id = db.insert_compute_allocation(
+        job_id=job_id,
+        cost_center_id=cost_center_id,
+        tier=decision.tier_label,
+        model=decision.model,
+        compute_budget_usd=decision.compute_budget_usd,
+        expected_revenue_usd=expected_revenue_usd,
+        expected_margin_usd=decision.expected_margin_usd,
+        session_id=task_id or None,
+        auth_token=token["auth_token"],
+    )
+    db.log_audit(
+        "system", "compute_tier_assigned",
+        {**audit_payload, "tier": decision.tier_label, "allocation_id": alloc_id,
+         "compute_budget_usd": decision.compute_budget_usd},
+    )
+
+    return {
+        "action": "allow",
+        "verdict": decision.verdict,
+        "tier": decision.tier_label,
+        "model": decision.model,
+        "compute_budget_usd": decision.compute_budget_usd,
+        "expected_margin_usd": decision.expected_margin_usd,
+        "auth_token": token["auth_token"],
+        "expires_in": token["expires_in"],
+        "allocation_id": alloc_id,
+    }

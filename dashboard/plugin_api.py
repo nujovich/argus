@@ -233,6 +233,119 @@ async def sim_spend(body: SimSpendBody) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Compute Allocator — Phase 4.5
+# ---------------------------------------------------------------------------
+
+
+class ComputeRequestBody(BaseModel):
+    job_id: str
+    cost_center_id: str
+    expected_revenue_usd: float
+    projected_burn_usd: float
+    ref: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+@router.post("/sim/compute")
+async def sim_compute(body: ComputeRequestBody) -> dict:
+    """Allocate a compute tier (Ultra / Base / Reject) for a job.
+
+    Argus reads (expected_revenue, projected_burn), runs the compute
+    policy, and assigns a Nemotron tier with an auth token. The agent
+    must use the returned model + token for its inference calls; the
+    compute-integrity inspector then validates the telemetry session
+    actually ran on the authorized model. See CLAUDE.md §3.2."""
+    import hook as _hook
+    import anyio
+
+    task_id = body.session_id or "sim"
+    result = await anyio.to_thread.run_sync(
+        lambda: _hook.process_compute_request_for_api(
+            job_id=body.job_id,
+            cost_center_id=body.cost_center_id,
+            expected_revenue_usd=body.expected_revenue_usd,
+            projected_burn_usd=body.projected_burn_usd,
+            ref=body.ref,
+            task_id=task_id,
+        )
+    )
+    return {"result": result}
+
+
+@router.get("/compute/allocations")
+async def list_compute_allocations(job_id: Optional[str] = None) -> dict:
+    """List compute allocations. Used by the dashboard's fleet view."""
+    items = db.get_compute_allocations(job_id=job_id)
+    return {"items": items}
+
+
+class LlmCostBody(BaseModel):
+    job_id: str
+    amount_usd: float
+    ref: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+@router.post("/admin/llm_cost")
+async def admin_llm_cost(body: LlmCostBody) -> dict:
+    """Admin endpoint used by demo drivers to simulate Nemotron consumption
+    without having to run a full Hermes chat. In production this row is
+    automatically derived by the read-only ATTACH to hermes-telemetry —
+    this endpoint is only for the deterministic demo path."""
+    row_id = db.insert_ledger_row(
+        job_id=body.job_id,
+        kind="llm_cost",
+        amount_usd=float(body.amount_usd),
+        source="sim_llm",
+        ref=body.ref,
+        session_id=body.session_id,
+    )
+    db.log_audit(
+        "system", "llm_cost_recorded",
+        {"job_id": body.job_id, "amount_usd": body.amount_usd, "ref": body.ref},
+    )
+    return {"recorded": "llm_cost", "id": row_id}
+
+
+@router.get("/compute/fleet")
+async def compute_fleet() -> dict:
+    """Per-job rollup for the fleet view: tier + actual burn + margin."""
+    allocs = db.get_compute_allocations()
+    out: dict[str, dict] = {}
+    for a in allocs:
+        jid = a["job_id"]
+        if jid in out and out[jid]["status"] == "active":
+            continue  # newest active alloc wins
+        burn = db.get_job_burn(jid)
+        revenue = db.get_job_revenue(jid)
+        budget = a.get("compute_budget_usd") or 0.0
+        burn_ratio = (burn / budget) if budget > 0 else 0.0
+        margin = revenue - burn - sum(
+            row["amount_usd"]
+            for row in db._get_conn().execute(
+                "SELECT amount_usd FROM ledger WHERE job_id=? AND kind='external_spend'",
+                (jid,),
+            ).fetchall()
+        )
+        out[jid] = {
+            "job_id": jid,
+            "cost_center_id": a["cost_center_id"],
+            "tier": a["tier"],
+            "model": a["model"],
+            "status": a["status"],
+            "compute_budget_usd": budget,
+            "actual_burn_usd": burn,
+            "burn_ratio": burn_ratio,
+            "actual_revenue_usd": revenue,
+            "current_margin_usd": margin,
+            "expected_revenue_usd": a.get("expected_revenue_usd"),
+            "expected_margin_usd": a.get("expected_margin_usd"),
+            "downgrade_reason": a.get("downgrade_reason"),
+        }
+    return {"items": list(out.values())}
+
+
+# ---------------------------------------------------------------------------
 # Active tokens — for the dashboard's token-vault widget
 # ---------------------------------------------------------------------------
 

@@ -39,6 +39,13 @@ class Budget:
     soft_threshold: float = 0.8
     auto_approve_under_usd: float = 0.0
     manager_under_usd: Optional[float] = None
+    # Phase 4.5 — compute tier policy fields, optional per cost center.
+    # When unset, the cost center behaves cash-only (existing v1 behaviour).
+    ultra_model: Optional[str] = None
+    base_model: Optional[str] = None
+    ultra_min_revenue_usd: Optional[float] = None
+    ultra_min_margin_usd: Optional[float] = None
+    reject_below_margin_usd: Optional[float] = None
 
 
 # Default config seeded if cost_centers.yaml is missing — makes the demo
@@ -71,6 +78,20 @@ def load_budgets() -> Dict[str, Budget]:
                 float(cfg["manager_under_usd"])
                 if cfg.get("manager_under_usd") is not None
                 else None
+            ),
+            ultra_model=cfg.get("ultra_model"),
+            base_model=cfg.get("base_model"),
+            ultra_min_revenue_usd=(
+                float(cfg["ultra_min_revenue_usd"])
+                if cfg.get("ultra_min_revenue_usd") is not None else None
+            ),
+            ultra_min_margin_usd=(
+                float(cfg["ultra_min_margin_usd"])
+                if cfg.get("ultra_min_margin_usd") is not None else None
+            ),
+            reject_below_margin_usd=(
+                float(cfg["reject_below_margin_usd"])
+                if cfg.get("reject_below_margin_usd") is not None else None
             ),
         )
     return out or dict(DEFAULT_CONFIG)
