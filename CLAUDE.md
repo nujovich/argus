@@ -451,6 +451,10 @@ telemetry post-hoc.
   US-only barrier is on production Link accounts only. No production keys.
 - **Submission deadline: 2026-06-30** → scope is **LOCKED** to what
   this document describes. New ideas land in [`FUTURE.md`](./FUTURE.md).
+- **Screencast landing page lives in [`site/`](./site/)** — standalone
+  Astro + GSAP static site. Not part of the Hermes plugin; the
+  "no Next.js / no bundled React / theme vars only" rules in §7 apply to
+  `dashboard/` only and do not constrain `site/`.
 
 ### Demo script — the AI factory floor
 

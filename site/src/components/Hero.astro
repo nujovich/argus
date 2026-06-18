@@ -1,0 +1,50 @@
+---
+---
+<section id="hero" style="padding-top: 160px; border-bottom: none;">
+  <div class="container">
+    <span class="eyebrow reveal">Argus — Nous × NVIDIA × Stripe Hackathon 2026</span>
+    <h1 class="reveal" style="margin-top: 24px; max-width: 14ch;">
+      The economic OS for an <span class="gpu">AI factory</span>.
+    </h1>
+    <p class="reveal" style="margin-top: 24px; max-width: 60ch; font-size: 18px;">
+      Every autonomous agent burns two capitals: <span class="cash">cash</span> through Stripe
+      and <span class="gpu">compute</span> through NVIDIA. Argus meters both into a single
+      ledger, and allocates them toward margin — in real time.
+    </p>
+
+    <div class="hero-grid reveal" style="margin-top: 64px;">
+      <div class="hero-tile">
+        <span class="eyebrow cash">Cash</span>
+        <p class="mono" style="margin-top: 12px; color: var(--fg); font-size: 28px;">$ 200.00</p>
+        <p style="margin-top: 4px;">Job A revenue</p>
+      </div>
+      <div class="hero-tile">
+        <span class="eyebrow gpu">Compute</span>
+        <p class="mono" style="margin-top: 12px; color: var(--fg); font-size: 28px;">$ 15.32</p>
+        <p style="margin-top: 4px;">Nemotron 3 Ultra burn</p>
+      </div>
+      <div class="hero-tile">
+        <span class="eyebrow">Margin</span>
+        <p class="mono" style="margin-top: 12px; color: var(--accent-2); font-size: 28px;">+ $ 184.68</p>
+        <p style="margin-top: 4px;">Net, live</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .hero-tile {
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+  }
+  @media (max-width: 720px) {
+    .hero-grid { grid-template-columns: 1fr; }
+  }
+</style>

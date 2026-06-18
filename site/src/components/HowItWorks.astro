@@ -1,0 +1,50 @@
+---
+const layers = [
+  { name: 'Capture',  role: 'pre_tool_call hook + Stripe webhooks + revenue & compute declarations.' },
+  { name: 'Ledger',   role: 'SQLite WAL. Unified cash + compute ledger, cost centers, budgets, tokens.' },
+  { name: 'Policy',   role: 'Pure function: (declaration, snapshot) → Verdict. No I/O, no clock.' },
+  { name: 'Enforcement', role: 'In-process hook + Stripe Issuing authorization webhook. Two layers.' },
+  { name: 'Compute Allocator', role: 'Assigns Nemotron tier per job. Re-evaluates each turn. Emits downgrade orders.' },
+  { name: 'Dashboard', role: 'Workflow timeline, fleet view, approvals, P&L, token vault, live event stream.' },
+];
+---
+<section id="how">
+  <div class="container">
+    <span class="eyebrow reveal">Architecture</span>
+    <h2 class="reveal" style="margin-top: 16px;">Six layers. Ledger at the center.</h2>
+    <p class="reveal" style="margin-top: 16px; max-width: 60ch;">
+      Policy never writes. Only Enforcement and the Compute Allocator mutate runtime
+      state — both audited.
+    </p>
+
+    <div class="layers" style="margin-top: 48px;">
+      {layers.map((l, i) => (
+        <div class="layer reveal">
+          <span class="mono" style="color: var(--fg-dim);">0{i + 1}</span>
+          <h3 style="margin-top: 8px;">{l.name}</h3>
+          <p style="margin-top: 8px;">{l.role}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .layers {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .layer {
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+  }
+  @media (max-width: 880px) {
+    .layers { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 540px) {
+    .layers { grid-template-columns: 1fr; }
+  }
+</style>

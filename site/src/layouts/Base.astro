@@ -1,0 +1,42 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = 'Argus — the economic OS for an AI factory',
+  description = 'Argus meters every dollar of cash and compute an autonomous agent burns, and allocates both as capital toward margin, in real time.',
+} = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+  </head>
+  <body>
+    <slot />
+    <script>
+      import { gsap } from 'gsap';
+      import { ScrollTrigger } from 'gsap/ScrollTrigger';
+      gsap.registerPlugin(ScrollTrigger);
+
+      gsap.utils.toArray<HTMLElement>('.reveal').forEach((el) => {
+        gsap.to(el, {
+          opacity: 1,
+          y: 0,
+          duration: 0.9,
+          ease: 'power3.out',
+          scrollTrigger: { trigger: el, start: 'top 85%' },
+        });
+      });
+    </script>
+  </body>
+</html>
