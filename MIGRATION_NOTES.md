@@ -79,9 +79,49 @@ budget upserts), and all P&L / snapshot sums are **rounded to 2 dp on read**
   `db._ensure_schema` on every connection (WAL + foreign_keys ON), followed by the
   additive `ALTER`s for older DBs.
 
-## 5. Deferred to other layers (NOT built here)
+## 5. Deferred to other layers (NOT built here, as of the Ledger task)
 
-- Policy verdicts / routing thresholds (Policy layer — pure function).
+- Policy verdicts / routing thresholds (Policy layer — pure function). DONE — see
+  `policy.evaluate_spend` (added in the Policy task).
 - The `pre_tool_call` synchronous hold that reads `approval_requests`
-  pending→approved/rejected/timeout (Enforcement; mechanism validated separately).
+  pending→approved/rejected/timeout (Enforcement). DONE — see `enforcement.py`.
 - Capture writing `llm_cost`/revenue/external_spend facts and `link_session` calls.
+
+## 6. Enforcement layer — §4 wording correction + flagged gaps (do NOT edit CLAUDE.md)
+
+The Enforcement layer (`enforcement.py`, the `pre_tool_call` gate for real Stripe
+spend) surfaced one doc correction and two gaps:
+
+- **§4 "matches tool names" → should read "matches terminal commands".** GROUND
+  TRUTH: the Stripe skills do NOT register their own tools — every command runs
+  through the `terminal` tool, so the hook payload is
+  `{tool_name:"terminal", tool_input:{command:"..."}}`. Enforcement matches
+  `tool_name=="terminal"` AND a spend command pattern (`stripe projects add`,
+  `stripe projects upgrade`, `mpp pay`), explicitly NOT `stripe_*` tool names. The
+  existing `hook.py` (which matches `stripe_*` / `argus_request_spend`) is left in
+  place as a defense-in-depth backstop; `__init__.register` wires both — their
+  matchers don't overlap, so they never double-gate the same call. A later doc
+  commit should reword §4.
+
+- **GAP — request_spend declaration storage.** §9.1(c) projected_usd resolution
+  correlates a terminal spend command to a prior `request_spend` declaration.
+  Enforcement keeps that correlation in an **in-process cache**
+  (`enforcement.declare_spend` / `_declarations`). Recording declarations durably
+  is **Capture's** job; a cross-process implementation needs a small store table
+  (e.g. `spend_declarations`) written by Capture and read by Enforcement. Flagged,
+  not built — did NOT bolt it onto the Ledger store.
+
+- **GAP — session→job→cost_center read getters.** To resolve `cost_center_id` from
+  a session/job purely via the `jobs`/`job_sessions` bridge (when there is no
+  declaration), the store would need read getters like `get_job_for_session(session_id)`
+  / `get_cost_center_for_job(job_id)`. They don't exist; per the task's "flag, don't
+  bolt onto the store" rule, Enforcement currently takes `cost_center_id` from the
+  declaration and falls back to `default`. Add those getters to the store later if
+  declaration-less attribution is needed.
+
+- **Fail-closed invariant (the financial-gate guarantee).** Hermes fails OPEN on a
+  hook exception (`tool_executor.py:283`). On a matched spend command, `enforcement`
+  wraps the entire gate body in try/except and returns BLOCK on ANY error (db,
+  snapshot, Policy, even if the error-audit write itself fails). There is no code
+  path on a matched spend command that returns allow without an explicit Policy
+  ALLOW or a human approval; timeout is treated as rejection.
