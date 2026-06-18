@@ -80,6 +80,169 @@ def decide(decl: SpendDeclaration, snap: BudgetSnapshot) -> Decision:
 
 
 # ---------------------------------------------------------------------------
+# Spend policy v2 — richer, dashboard-ready verdict (CLAUDE.md §2, §3, §8)
+#
+# Same pure-function contract as decide() above, but surfaces the data the
+# approval card needs: projected cost-center total, the limit, breach/soft
+# flags, and the job margin-if-approved (the "profitable but over budget" beat).
+# Additive: decide() and its callers (hook.py) are intentionally left untouched.
+#
+# NOTE — behavioural difference vs decide(): per CLAUDE.md §3, auto-approve is
+# evaluated FIRST here, so a sub-threshold spend that nonetheless breaches the
+# cost-center limit is ALLOWed (auto wins). decide() escalates breaches first.
+# evaluate_spend follows the §3 routing precisely; pick one surface per caller.
+#
+# NOTE — snapshot shape gap: the Ledger store today exposes ledger_snapshot()
+# -> {cost_center_id, spent_usd, limit_usd, remaining_usd, soft_threshold} and
+# budget_for() -> the budgets row. Neither returns auto_approve_under_usd +
+# manager_under_usd + per-job revenue/spend together in the shape below. The
+# CALLER (Enforcement) composes SpendSnapshot from budget_for() + ledger_snapshot()
+# + per-job revenue/spend. Policy only consumes it. Do NOT change the store here.
+# ---------------------------------------------------------------------------
+
+_CENTS = 2
+
+
+def _q(amount: float) -> float:
+    """Quantize to cents, matching the Ledger's money convention. Pure."""
+    return round(float(amount), _CENTS)
+
+
+SpendTier = Literal["manager", "finance"]
+
+
+@dataclass(frozen=True)
+class BudgetLimits:
+    """The §8 budgets columns Policy needs. ``manager_under_usd`` may be None."""
+    limit_usd: float
+    soft_threshold: float
+    auto_approve_under_usd: float
+    manager_under_usd: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class SpendSnapshot:
+    """Everything Policy needs to decide, supplied by the caller (no I/O here).
+
+    ``job_revenue_usd`` / ``job_spend_so_far_usd`` may be 0 or None when revenue
+    hasn't been declared yet — margin is then surfaced as None (unknown), never
+    used to gate.
+    """
+    cost_center_id: str
+    budget: BudgetLimits
+    cost_center_used_usd: float
+    job_revenue_usd: Optional[float] = None
+    job_spend_so_far_usd: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class SpendVerdict:
+    """Pure result of evaluate_spend. ``decision`` is ALLOW or NEEDS_APPROVAL;
+    ``tier`` is set only when approval is needed. The remaining fields are
+    COMPUTED from inputs for the approval card — Policy never fetches them."""
+    decision: Literal["ALLOW", "NEEDS_APPROVAL"]
+    reason: str
+    projected_usd: float
+    projected_center_total_usd: float
+    limit_usd: float
+    breach: bool
+    soft: bool
+    tier: Optional[SpendTier] = None
+    job_margin_if_approved_usd: Optional[float] = None
+
+    @property
+    def allowed(self) -> bool:
+        return self.decision == "ALLOW"
+
+    @property
+    def needs_approval(self) -> bool:
+        return self.decision == "NEEDS_APPROVAL"
+
+
+def evaluate_spend(
+    job_id: str,
+    cost_center_id: str,
+    projected_usd: float,
+    snapshot: SpendSnapshot,
+) -> SpendVerdict:
+    """Pure: (job, projected_spend, snapshot) -> verdict. No I/O, no clock,
+    no randomness. Same inputs always yield the same verdict.
+
+    Routing (CLAUDE.md §3 + §8 budget columns):
+      1. projected <= auto_approve_under_usd            -> ALLOW (auto)
+      2. else tier by amount AND budget state:
+           projected < manager_under_usd AND not breach -> manager
+           otherwise (large | manager NULL | breach)    -> finance
+         A budget breach always escalates to finance.
+      3. margin is informational only (surfaced, never a gate).
+    """
+    b = snapshot.budget
+    projected = _q(projected_usd)
+    limit = _q(b.limit_usd)
+
+    projected_center_total = _q(snapshot.cost_center_used_usd + projected)
+    breach = projected_center_total > limit
+    soft = projected_center_total > _q(limit * b.soft_threshold)
+
+    # Margin-awareness (informational). Unknown -> None when no revenue/spend info.
+    margin: Optional[float] = None
+    if snapshot.job_revenue_usd is not None or snapshot.job_spend_so_far_usd is not None:
+        revenue = snapshot.job_revenue_usd or 0.0
+        spend_so_far = snapshot.job_spend_so_far_usd or 0.0
+        margin = _q(revenue - spend_so_far - projected)
+
+    def _mk(decision: str, reason: str, tier: Optional[SpendTier]) -> SpendVerdict:
+        return SpendVerdict(
+            decision=decision,
+            reason=reason,
+            projected_usd=projected,
+            projected_center_total_usd=projected_center_total,
+            limit_usd=limit,
+            breach=breach,
+            soft=soft,
+            tier=tier,
+            job_margin_if_approved_usd=margin,
+        )
+
+    # 1. Auto-approve small spends (auto wins, per §3 ordering).
+    if projected <= _q(b.auto_approve_under_usd):
+        return _mk("ALLOW", "auto_approve_under_threshold", None)
+
+    # Margin context string for the approval card.
+    if margin is None:
+        margin_note = "margin_unknown"
+    elif margin >= 0:
+        margin_note = f"margin_positive({margin:.2f})"
+    else:
+        margin_note = f"margin_negative({margin:.2f})"
+
+    # 2. Tier routing — amount AND budget state both matter.
+    manager_cap = b.manager_under_usd
+    if manager_cap is not None and projected < _q(manager_cap) and not breach:
+        return _mk(
+            "NEEDS_APPROVAL",
+            f"manager_tier: projected {projected:.2f} < manager_cap {_q(manager_cap):.2f},"
+            f" center_total {projected_center_total:.2f}/{limit:.2f}"
+            f"{' SOFT' if soft else ''}; {margin_note}",
+            "manager",
+        )
+
+    # Otherwise finance: large amount, OR manager_under_usd is NULL, OR breach.
+    if breach:
+        cause = "budget_breach"
+    elif manager_cap is None:
+        cause = "no_manager_tier"
+    else:
+        cause = "large_amount"
+    return _mk(
+        "NEEDS_APPROVAL",
+        f"finance_tier({cause}): center_total {projected_center_total:.2f}/{limit:.2f}"
+        f"{' BREACH' if breach else (' SOFT' if soft else '')}; {margin_note}",
+        "finance",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Compute Allocator (Phase 4.5)  — see CLAUDE.md §3.2
 # ---------------------------------------------------------------------------
 
