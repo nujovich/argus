@@ -471,12 +471,12 @@ margin profile. All governed by the same Argus.
   `compute_tier_downgraded`. Agent runs on cheap model, consumes
   $0.30, delivers, margin +$2.70. Beat narrative: *"the agent didn't
   get to burn $5 of Ultra on a $3 job."*
-- **Job C — domain registration, mid-flight throttle**.
-  Cash spend via **`stripe-projects`** (`cloudflare/registrar:domain`).
-  Agent declared `projected_burn=$5` for the surrounding research /
-  copy work, but actual compute burn races to $4 while only halfway
-  through. Argus emits `downgrade_to_base`. Agent switches model on
-  next turn. Audit: `mid_flight_throttle`.
+- **Job C — one-shot card purchase, mid-flight throttle**.
+  Cash spend via **`stripe-link-cli`** (sandbox Link account; card /
+  checkout flow). Agent declared `projected_burn=$5` for the
+  surrounding research / copy work, but actual compute burn races to
+  $4 while only halfway through. Argus emits `downgrade_to_base`.
+  Agent switches model on next turn. Audit: `mid_flight_throttle`.
 - **Beat 4 — cash teeth (rogue defense)**.
   An adversarial scenario: an injected agent tries to issue a
   `stripe projects add` without an auth token. Layer 1 hook blocks.
