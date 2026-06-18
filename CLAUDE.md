@@ -196,14 +196,20 @@ from the exact pre-spend or pre-inference point. On rejection, the
 agent gets a structured block and self-corrects (smaller spend, cheaper
 tier, different approach).
 
-**Enterprise differentiator vs Stripe's per-action limit:** Stripe's
-built-in limit is a static $/call ceiling on cash. Argus is **dynamic**
-(against a live ledger), **cross-session** (budgets persist across
-agent runs), **margin-aware** (compute tier is allocated by revenue
-expectation), **dual-currency** (governs cash and compute through the
-same engine), **observable** (P&L + fleet view), and produces an
-**auditable record** of every capital allocation — what enterprises
-need before they let a fleet of agents loose on their balance sheet.
+**Enterprise differentiator vs Stripe's native spend controls:** Stripe's
+own controls have grown — beyond the static $/call per-action ceiling, Stripe
+Projects now offers per-provider spend caps, and Stripe has announced a
+forthcoming data layer so providers can meter and bill agent-built software.
+But these remain **static, per-provider, spend-only** guardrails: a cap knows
+nothing about the job it's serving. Argus operates one level up. It is
+**dynamic** (decisions run against a live ledger, not a fixed ceiling),
+**cross-session** (budgets persist across agent runs, not per-call),
+**cross-provider** (one cost center spans every Stripe skill, not a silo per
+vendor), **margin-aware** (it weighs revenue per job, not just spend),
+**observable** (live P&L and audit trail), and produces an **auditable record**
+of every human decision. Stripe answers "can this single call afford it?";
+Argus answers "is this job still profitable, and who approved the spend?" —
+which is what enterprises actually need to let an agent touch their wallet.
 
 ---
 
@@ -229,8 +235,12 @@ need before they let a fleet of agents loose on their balance sheet.
   curl Argus's API.
 - **Dashboard plugin SDK** — `window.__HERMES_PLUGIN_SDK__` (React +
   hooks + shadcn components + theme CSS vars + `fetchJSON`).
-- **Stripe Skills for Hermes** — the surface Argus intercepts via the
-  `stripe_*` prefix on the hook.
+- **Stripe Skills for Hermes** — the surface Argus intercepts. The
+  `pre_tool_call` hook matches the tool names of `mpp-agent` (the
+  per-call `mpp pay` / HTTP 402 path), `stripe-projects` (`stripe
+  projects add <provider>/<service>` and `stripe projects upgrade
+  <provider>`), and `stripe-link-cli` (card/checkout flows; sandbox
+  Link accounts work from anywhere — see §10).
 - **Runtime** — Nemotron 3 Ultra via NVIDIA's API (configured by the
   user in `hermes model`). NemoClaw is the safe-execution
   environment a production deployment would run inside.
@@ -435,8 +445,10 @@ telemetry post-hoc.
 
 ## 10. Hackathon constraints (non-functional)
 
-- **Stripe Link CLI is US-only** → use **Stripe TEST/sandbox mode**
-  for every demo flow.
+- **Stripe Link CLI is US-only in production** → use **Stripe TEST/sandbox
+  mode** for every demo flow. Sandbox Link accounts can be created with any
+  valid email (no US requirement), so `auth login` works from anywhere; the
+  US-only barrier is on production Link accounts only. No production keys.
 - **Submission deadline: 2026-06-30** → scope is **LOCKED** to what
   this document describes. New ideas land in [`FUTURE.md`](./FUTURE.md).
 
@@ -446,26 +458,31 @@ Three jobs from an autonomous AI services firm, each with a different
 margin profile. All governed by the same Argus.
 
 - **Job A — premium enterprise research ($200 commission)**.
+  Per-call data spend via **`mpp-agent`** (HTTP 402 → `mpp pay`).
   Agent calls `argus-request-compute(expected_revenue=200, projected_burn=15)`.
   Argus assigns **Nemotron 3 Ultra**. Agent runs deep multi-turn
   research, consumes ~$15 of Ultra inference, delivers, **margin +$185
   visible in P&L with Nemotron-priced LLM column**.
-- **Job B — low-margin generation ($3 commission)**.
-  Agent calls `argus-request-compute(expected_revenue=3, projected_burn=5)`.
-  Argus computes negative margin → **downgrades to Base tier**. Audit:
+- **Job B — SaaS provisioning ($3 commission)**.
+  Cash spend via **`stripe-projects`** (`stripe projects add
+  <provider>/<service>`). Agent calls
+  `argus-request-compute(expected_revenue=3, projected_burn=5)`. Argus
+  computes negative margin → **downgrades to Base tier**. Audit:
   `compute_tier_downgraded`. Agent runs on cheap model, consumes
   $0.30, delivers, margin +$2.70. Beat narrative: *"the agent didn't
   get to burn $5 of Ultra on a $3 job."*
-- **Job C — mid-flight throttle**.
-  Agent declared `projected_burn=$5`, but actual burn races to $4
-  while only halfway through. Argus emits `downgrade_to_base`. Agent
-  switches model on next turn. Audit: `mid_flight_throttle`.
+- **Job C — one-shot card purchase, mid-flight throttle**.
+  Cash spend via **`stripe-link-cli`** (sandbox Link account; card /
+  checkout flow). Agent declared `projected_burn=$5` for the
+  surrounding research / copy work, but actual compute burn races to
+  $4 while only halfway through. Argus emits `downgrade_to_base`.
+  Agent switches model on next turn. Audit: `mid_flight_throttle`.
 - **Beat 4 — cash teeth (rogue defense)**.
   An adversarial scenario: an injected agent tries to issue a
-  `stripe_create_payment_intent` without an auth token. Layer 1 hook
-  blocks. Audit: `🚨 stripe_blocked_no_token`. *"The card network
-  declines what Argus didn't authorize, even if the agent goes
-  around Hermes."*
+  `stripe projects add` without an auth token. Layer 1 hook blocks.
+  Audit: `🚨 stripe_blocked_no_token`. *"The card network declines
+  what Argus didn't authorize, even if the agent goes around
+  Hermes."*
 
 Closing line for the screencast:
 
