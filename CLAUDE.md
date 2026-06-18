@@ -196,19 +196,20 @@ from the exact pre-spend or pre-inference point. On rejection, the
 agent gets a structured block and self-corrects (smaller spend, cheaper
 tier, different approach).
 
-**Enterprise differentiator vs Stripe's native spend controls:**
-Stripe now ships per-action ceilings, per-provider spend caps inside
-Stripe Projects, and has publicly announced a metering/billing data
-layer so providers can charge agent software directly. All three are
-static, per-provider, **spend-only** controls. Argus is **dynamic**
-(against a live ledger), **cross-session** (budgets persist across
-agent runs), **margin-aware** (compute tier is allocated by revenue
-expectation per job — not just spend), **dual-currency** (governs cash
-and compute through the same engine), **observable** (live cross-job
-P&L + fleet view, with cost-center budgets), and produces an
-**auditable record of every human decision** on every capital
-allocation — what enterprises need before they let a fleet of agents
-loose on their balance sheet.
+**Enterprise differentiator vs Stripe's native spend controls:** Stripe's
+own controls have grown — beyond the static $/call per-action ceiling, Stripe
+Projects now offers per-provider spend caps, and Stripe has announced a
+forthcoming data layer so providers can meter and bill agent-built software.
+But these remain **static, per-provider, spend-only** guardrails: a cap knows
+nothing about the job it's serving. Argus operates one level up. It is
+**dynamic** (decisions run against a live ledger, not a fixed ceiling),
+**cross-session** (budgets persist across agent runs, not per-call),
+**cross-provider** (one cost center spans every Stripe skill, not a silo per
+vendor), **margin-aware** (it weighs revenue per job, not just spend),
+**observable** (live P&L and audit trail), and produces an **auditable record**
+of every human decision. Stripe answers "can this single call afford it?";
+Argus answers "is this job still profitable, and who approved the spend?" —
+which is what enterprises actually need to let an agent touch their wallet.
 
 ---
 
@@ -444,9 +445,10 @@ telemetry post-hoc.
 
 ## 10. Hackathon constraints (non-functional)
 
-- **`stripe-link-cli` is out of scope** (US-only; the builder is in
-  Spain). Demo flows go through `mpp-agent` and `stripe-projects` in
-  **Stripe TEST/sandbox mode**.
+- **Stripe Link CLI is US-only in production** → use **Stripe TEST/sandbox
+  mode** for every demo flow. Sandbox Link accounts can be created with any
+  valid email (no US requirement), so `auth login` works from anywhere; the
+  US-only barrier is on production Link accounts only. No production keys.
 - **Submission deadline: 2026-06-30** → scope is **LOCKED** to what
   this document describes. New ideas land in [`FUTURE.md`](./FUTURE.md).
 
