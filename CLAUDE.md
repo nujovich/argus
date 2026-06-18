@@ -237,10 +237,10 @@ which is what enterprises actually need to let an agent touch their wallet.
   hooks + shadcn components + theme CSS vars + `fetchJSON`).
 - **Stripe Skills for Hermes** — the surface Argus intercepts. The
   `pre_tool_call` hook matches the tool names of `mpp-agent` (the
-  per-call `mpp pay` / HTTP 402 path) and `stripe-projects`
-  (`stripe projects add <provider>/<service>` and `stripe projects
-  upgrade <provider>`). `stripe-link-cli` is **out of scope**
-  (US-only; requires a Link account) and therefore not matched.
+  per-call `mpp pay` / HTTP 402 path), `stripe-projects` (`stripe
+  projects add <provider>/<service>` and `stripe projects upgrade
+  <provider>`), and `stripe-link-cli` (card/checkout flows; sandbox
+  Link accounts work from anywhere — see §10).
 - **Runtime** — Nemotron 3 Ultra via NVIDIA's API (configured by the
   user in `hermes model`). NemoClaw is the safe-execution
   environment a production deployment would run inside.
