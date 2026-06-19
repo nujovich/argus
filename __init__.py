@@ -14,10 +14,14 @@ Two complementary, non-overlapping pre_tool_call gates are registered:
 
 from __future__ import annotations
 
-import enforcement  # noqa: F401  (plugin dir is on sys.path at runtime)
+import capture  # noqa: F401  (plugin dir is on sys.path at runtime)
+import enforcement  # noqa: F401
 import hook  # noqa: F401
 
 
 def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", enforcement.on_pre_tool_call)
     ctx.register_hook("pre_tool_call", hook.on_pre_tool_call)
+    # Capture's post_tool_call recorder — closes the intent→confirmation loop by
+    # writing the REAL confirmed spend after a matched terminal command runs.
+    capture.register(ctx)

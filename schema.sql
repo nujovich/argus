@@ -10,19 +10,50 @@
 -- per-cost-center budget rollups actually work (see MIGRATION_NOTES.md).
 
 -- ── §8: the dollar ledger ──────────────────────────────────────────────────
+-- NOTE (Capture extension, flagged): `tool_call_id` is NOT in §8's verbatim
+-- schema. Capture's post_tool_call recorder needs an idempotency key so a
+-- replayed confirmation never double-writes a confirmed spend (see capture.py /
+-- MIGRATION_NOTES.md). It is nullable: every other writer (revenue, llm_cost,
+-- the declaration-path external_spend in hook.py) leaves it NULL.
 CREATE TABLE IF NOT EXISTS ledger (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT    NOT NULL,
-    job_id      TEXT    NOT NULL,
-    kind        TEXT    NOT NULL CHECK (kind IN
-                  ('revenue', 'llm_cost', 'external_spend')),
-    amount_usd  REAL    NOT NULL,
-    source      TEXT,
-    ref         TEXT,
-    session_id  TEXT
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           TEXT    NOT NULL,
+    job_id       TEXT    NOT NULL,
+    kind         TEXT    NOT NULL CHECK (kind IN
+                   ('revenue', 'llm_cost', 'external_spend')),
+    amount_usd   REAL    NOT NULL,
+    source       TEXT,
+    ref          TEXT,
+    session_id   TEXT,
+    tool_call_id TEXT
 );
 CREATE INDEX IF NOT EXISTS ledger_job_idx ON ledger(job_id);
 CREATE INDEX IF NOT EXISTS ledger_session_idx ON ledger(session_id);
+-- NOTE: the index on tool_call_id is created in db._ensure_schema AFTER the
+-- additive ALTER, because on an older DB the `ledger` table predates the column
+-- (CREATE TABLE IF NOT EXISTS is skipped) and indexing a missing column here
+-- would abort the whole script before spend_declarations is created.
+
+-- ── Capture: durable spend declarations (CLAUDE.md §2 Capture, §9.1(c)) ──────
+-- The intent half of the intent→confirmation loop. The agent declares a spend
+-- BEFORE the terminal command runs; Enforcement reads the open declaration to
+-- gate, and Capture's post_tool_call recorder consumes it once the REAL spend
+-- is confirmed. Durable (survives process restart) and cross-process — it
+-- replaces Enforcement's old in-process correlation cache. PASSIVE: no policy,
+-- no cost_center column (cc is resolved via the jobs bridge — §8 attribution
+-- chain — not carried on the declaration).
+CREATE TABLE IF NOT EXISTS spend_declarations (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id        TEXT    NOT NULL,
+    session_id    TEXT,
+    projected_usd REAL    NOT NULL,
+    ref           TEXT,
+    declared_at   TEXT    NOT NULL,
+    consumed_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS spend_decl_session_idx ON spend_declarations(session_id);
+CREATE INDEX IF NOT EXISTS spend_decl_job_idx ON spend_declarations(job_id);
+CREATE INDEX IF NOT EXISTS spend_decl_open_idx ON spend_declarations(consumed_at);
 
 -- ── Attribution bridge — session → job → cost_center (CLAUDE.md §8 line 409) ─
 -- §5 says to join telemetry on a session→job→cost_center chain, but §8's ledger

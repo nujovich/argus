@@ -25,11 +25,11 @@ never lets Policy touch I/O.
 from __future__ import annotations
 
 import re
-import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
 import db
+import matchers
 import policy
 
 
@@ -39,41 +39,22 @@ POLL_INTERVAL_SEC = 0.5           # validated §6 Path A poll cadence
 DEFAULT_COST_CENTER = "default"
 
 
-# ── spend command matchers ───────────────────────────────────────────────────
-# Gate ONLY real spend. Patterns are deliberately specific: over-matching blocks
-# the agent on reads; under-matching leaks spend. `list`/`catalog`/`status`/`init`
-# never match these, so they pass through untouched.
-_SPEND_PATTERNS = (
-    re.compile(r"\bstripe\s+projects\s+add\b"),       # provisioning spend
-    re.compile(r"\bstripe\s+projects\s+upgrade\b"),   # tier change = spend
-    re.compile(r"\bmpp\s+pay\b"),                      # link-cli / 402 pay path
-)
+# ── spend command matchers (CHANGE 1) ────────────────────────────────────────
+# The patterns live in ONE place — matchers.py — so the gate (here) and the
+# recorder (capture.py) can never disagree about what a spend is. Re-exported
+# under the historical private names so existing callers/tests keep working.
+_command_of = matchers.command_of
+is_spend_command = matchers.is_spend_command
+_SPEND_PATTERNS = matchers.SPEND_PATTERNS
 
 
-def _command_of(tool_name: str, args: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Return the shell command string iff this is a `terminal` tool call."""
-    if tool_name != "terminal" or not isinstance(args, dict):
-        return None
-    cmd = args.get("command")
-    if cmd is None:
-        cmd = args.get("cmd")  # tolerate alternate key
-    return str(cmd) if cmd is not None else None
-
-
-def is_spend_command(command: str) -> bool:
-    return any(p.search(command) for p in _SPEND_PATTERNS)
-
-
-# ── request_spend declaration correlation (§9.1(c)) ──────────────────────────
-# In-process correlation cache: a request_spend(...) declaration the agent makes
-# BEFORE its terminal spend command. Keyed by session/task id (the correlation
-# key carried in the hook payload).
-#
-# GAP (flagged, not built here): durable / cross-process declarations belong in
-# the Ledger store as a table written by Capture; this in-process cache is the
-# enforcement-side correlation only. Recording declarations is Capture's job.
-_declarations: Dict[str, Dict[str, Any]] = {}
-_decl_lock = threading.Lock()
+# ── request_spend declaration correlation (§9.1(c)) — now DURABLE (CHANGE 2) ──
+# The in-process cache that MIGRATION_NOTES §6 flagged is gone. Declarations are
+# a durable, cross-process Ledger table (spend_declarations) written by Capture
+# and read here. The gate body is unchanged: it still calls _lookup_declaration
+# and reads decl["job_id"] / decl["cost_center_id"] / decl["projected_usd"]; only
+# these two helpers were rewired to the store. cost_center is no longer carried
+# on the declaration — it is resolved via the jobs bridge (get_cost_center_for_job).
 
 
 def declare_spend(
@@ -84,36 +65,50 @@ def declare_spend(
     ref: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Record a request_spend declaration for later correlation. Returns the
-    stored record. (Called by Capture / the request_spend skill; exposed here
-    so Enforcement can correlate without reaching into another layer.)"""
-    rec = {
-        "job_id": str(job_id),
-        "cost_center_id": str(cost_center_id),
+    """Record a request_spend declaration durably. Registers the job→cost_center
+    mapping (so cc is recoverable from the jobs bridge) and writes the
+    declaration row. Returns the in-memory record shape Enforcement consumes.
+
+    NOTE: Capture's request_spend intake is the production write path; this
+    remains for callers/tests that correlate a declaration to a spend command."""
+    job_id, cost_center_id = str(job_id), str(cost_center_id)
+    db.register_job(job_id, cost_center_id)
+    db.insert_declaration(
+        job_id=job_id,
+        session_id=session_id,
+        projected_usd=round(float(projected_usd), 2),
+        ref=ref,
+    )
+    return {
+        "job_id": job_id,
+        "cost_center_id": cost_center_id,
         "projected_usd": round(float(projected_usd), 2),
         "ref": ref,
         "session_id": session_id,
     }
-    with _decl_lock:
-        if session_id:
-            _declarations[str(session_id)] = rec
-        _declarations[f"job:{job_id}"] = rec
-    return rec
 
 
 def _lookup_declaration(session_id: str, job_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    with _decl_lock:
-        if session_id and session_id in _declarations:
-            return _declarations[session_id]
-        if job_id and f"job:{job_id}" in _declarations:
-            return _declarations[f"job:{job_id}"]
-    return None
+    """Read the open declaration from the durable store and shape it like the
+    old in-process record (cc resolved via the jobs bridge, default fallback)."""
+    row = db.find_open_declaration(session_id=session_id, job_id=job_id)
+    if row is None:
+        return None
+    jid = row["job_id"]
+    return {
+        "job_id": jid,
+        "cost_center_id": db.get_cost_center_for_job(jid) or DEFAULT_COST_CENTER,
+        "projected_usd": row["projected_usd"],
+        "ref": row["ref"],
+        "session_id": row["session_id"],
+        "decl_id": row["id"],
+    }
 
 
 def clear_declarations() -> None:
-    """Test/reset hook."""
-    with _decl_lock:
-        _declarations.clear()
+    """Test/reset hook. Declarations are now durable (per-test DBs are isolated
+    by the tmp_hermes_home fixture), so this is a no-op kept for compatibility."""
+    return None
 
 
 # ── projected_usd resolution (priority order — never guess low) ──────────────

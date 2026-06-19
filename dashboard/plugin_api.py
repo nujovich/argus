@@ -7,12 +7,16 @@ synchronous-hold lives in the agent's pre_tool_call hook (see hook.py).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 
@@ -53,14 +57,167 @@ async def health() -> dict:
 
 @router.get("/pnl")
 async def pnl() -> dict:
-    rows = db.get_pnl_per_job()
+    """Three-sided P&L per job: revenue − llm_cost − external_spend. llm_cost is
+    derived from hermes-telemetry via the read-only A1 ATTACH (pnl_by_job)."""
+    rows = db.pnl_by_job()
     total = {
-        "revenue": sum(r["revenue"] for r in rows),
-        "llm_cost": sum(r["llm_cost"] for r in rows),
-        "external_spend": sum(r["external_spend"] for r in rows),
-        "pnl": sum(r["pnl"] for r in rows),
+        "revenue": round(sum(r["revenue"] for r in rows), 2),
+        "llm_cost": round(sum(r["llm_cost"] for r in rows), 2),
+        "external_spend": round(sum(r["external_spend"] for r in rows), 2),
+        "pnl": round(sum(r["pnl"] for r in rows), 2),
     }
     return {"jobs": rows, "total": total}
+
+
+# ---------------------------------------------------------------------------
+# Treasury — the SOLVENT-style company close (CLAUDE.md §9.2), all computed
+# ---------------------------------------------------------------------------
+
+
+@router.get("/treasury")
+async def treasury() -> dict:
+    """Company cash close: cash_position = seed_capital + gross_revenue −
+    total_spend. llm_cost uses the SAME single basis as /pnl (db.money_totals →
+    _total_llm_cost: A1 telemetry when present, else A2 ledger rows), so /pnl and
+    /treasury always agree on inference cost — no over-stated profit under A1."""
+    totals = db.money_totals()
+    seed = round(_cfg.seed_capital(), 2)
+    total_spend = round(totals["llm_cost"] + totals["external_spend"], 2)
+    net_pnl = round(totals["revenue"] - total_spend, 2)
+    return {
+        "seed_capital": seed,
+        "gross_revenue": totals["revenue"],
+        "total_spend": total_spend,
+        "net_pnl": net_pnl,
+        "cash_position": db.cash_position(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Revenue intake (CLAUDE.md §9.2) — the third P&L input. Two paths:
+#   A) /revenue/sim    — demo-only, no Stripe round-trip
+#   B) /revenue/stripe — REAL webhook, signature-verified (mandatory)
+# Both idempotent on ref so a replay never double-counts.
+# ---------------------------------------------------------------------------
+
+
+class RevenueSimBody(BaseModel):
+    # job_id Optional so a missing value returns a clean 400 (not a 422).
+    job_id: Optional[str] = None
+    amount_usd: float
+    ref: Optional[str] = None
+    source: Optional[str] = None
+
+
+@router.post("/revenue/sim")
+async def revenue_sim(body: RevenueSimBody) -> dict:
+    """DEMO-ONLY revenue intake. Writes a 'revenue' ledger row attributed to the
+    job, idempotent on ref. This is what the scripted demo driver calls."""
+    if not body.job_id or not body.job_id.strip():
+        raise HTTPException(status_code=400, detail="job_id required")
+    if body.ref and db.revenue_recorded(body.ref):
+        return {"recorded": "duplicate", "ref": body.ref}
+    source = body.source or "stripe-sim"
+    row_id = db.append_fact(
+        body.job_id, "revenue", float(body.amount_usd), source=source, ref=body.ref
+    )
+    db.append_audit(
+        "stripe-sim", "revenue_received",
+        {"job_id": body.job_id, "amount_usd": round(float(body.amount_usd), 2),
+         "ref": body.ref},
+    )
+    return {"recorded": "revenue", "id": row_id, "job_id": body.job_id, "ref": body.ref}
+
+
+# Sentinel attribution for revenue that arrives with no job_id — keeps treasury
+# correct without polluting any real job's per-job P&L (§9.2 attribution rule).
+_UNATTRIBUTED_JOB = "unattributed"
+_UNATTRIBUTED_CC = "unattributed"
+
+
+def _verify_stripe_signature(
+    raw_body: bytes, sig_header: str, secret: str, tolerance: int = 300
+) -> bool:
+    """Verify a Stripe ``Stripe-Signature`` header (scheme: ``t=<ts>,v1=<hmac>``)
+    against the test-mode signing secret. signed_payload = ``"{t}.{body}"``,
+    HMAC-SHA256 with the secret. Constant-time compare; replay window = tolerance
+    seconds. No `stripe` lib dependency — pure stdlib."""
+    if not secret or not sig_header:
+        return False
+    pairs = [p.split("=", 1) for p in sig_header.split(",") if "=" in p]
+    ts = next((v for k, v in pairs if k == "t"), None)
+    v1s = [v for k, v in pairs if k == "v1"]
+    if not ts or not v1s:
+        return False
+    try:
+        if tolerance and abs(time.time() - int(ts)) > tolerance:
+            return False
+    except ValueError:
+        return False
+    signed = f"{ts}.".encode() + raw_body
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return any(hmac.compare_digest(expected, v1) for v1 in v1s)
+
+
+def _stripe_revenue_fields(evt_type: str, obj: dict) -> tuple[float, Optional[str], Optional[str]]:
+    """(amount_usd, ref, job_id) from a verified Stripe object. Amounts are
+    cents (int) → dollars; ref is the object id (stable across redelivery)."""
+    metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+    if evt_type == "checkout.session.completed":
+        cents = obj.get("amount_total") or obj.get("amount") or 0
+    else:  # payment_intent.succeeded
+        cents = obj.get("amount_received") or obj.get("amount") or 0
+    amount = cents / 100.0 if isinstance(cents, int) else float(cents or 0)
+    ref = obj.get("id")
+    job_id = metadata.get("job_id")
+    return round(float(amount), 2), (str(ref) if ref else None), (str(job_id) if job_id else None)
+
+
+@router.post("/revenue/stripe")
+async def revenue_stripe(request: Request) -> dict:
+    """REAL Stripe webhook. Verifies the signature (MANDATORY — invalid → 400,
+    no row), handles checkout.session.completed / payment_intent.succeeded,
+    idempotent on the Stripe object id. Revenue with metadata.job_id is
+    attributed to that job; without it, recorded to the 'unattributed' sentinel
+    (treasury stays correct, per-job P&L isn't polluted)."""
+    raw = await request.body()
+    secret = _cfg.stripe_webhook_secret()
+    sig = request.headers.get("stripe-signature", "")
+    if not _verify_stripe_signature(raw, sig, secret or ""):
+        # Fail closed: no signature secret / bad signature → reject, write nothing.
+        raise HTTPException(status_code=400, detail="invalid stripe signature")
+
+    try:
+        evt = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    evt_type = evt.get("type")
+    data = evt.get("data") or {}
+    obj = data.get("object") if isinstance(data.get("object"), dict) else data
+
+    if evt_type not in ("checkout.session.completed", "payment_intent.succeeded"):
+        db.append_audit("stripe", "webhook_ignored", {"type": evt_type})
+        return {"recorded": "ignored", "type": evt_type}
+
+    amount, ref, job_id = _stripe_revenue_fields(evt_type, obj or {})
+
+    if ref and db.revenue_recorded(ref):
+        return {"recorded": "duplicate", "ref": ref}
+
+    if job_id:
+        db.append_fact(job_id, "revenue", amount, source="stripe", ref=ref)
+        db.append_audit(
+            "stripe", "revenue_received",
+            {"job_id": job_id, "amount_usd": amount, "ref": ref},
+        )
+        return {"recorded": "revenue", "job_id": job_id, "ref": ref}
+
+    # No job_id → do NOT guess. Record to the sentinel so cash stays right.
+    db.register_job(_UNATTRIBUTED_JOB, _UNATTRIBUTED_CC)
+    db.append_fact(_UNATTRIBUTED_JOB, "revenue", amount, source="stripe", ref=ref)
+    db.append_audit("stripe", "revenue_unattributed", {"ref": ref, "amount_usd": amount})
+    return {"recorded": "unattributed", "ref": ref}
 
 
 # ---------------------------------------------------------------------------

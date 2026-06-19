@@ -65,7 +65,9 @@ def test_non_terminal_tool_never_matched():
 # ── projected_usd resolution ─────────────────────────────────────────────────
 
 
-def test_resolution_prefers_declaration():
+def test_resolution_prefers_declaration(tmp_hermes_home):
+    # Declarations are durable now (CHANGE 2) — isolate the store per test.
+    db.init_db()
     enforcement.declare_spend("jD", 42.0, cost_center_id="cc", session_id="sess1")
     decl = enforcement._lookup_declaration("sess1")
     amt, src = enforcement._resolve_projected(decl, "stripe projects add x")

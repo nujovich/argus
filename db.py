@@ -168,11 +168,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     for col_sql in (
         "ALTER TABLE compute_allocations ADD COLUMN actual_model TEXT",
         "ALTER TABLE compute_allocations ADD COLUMN integrity_status TEXT",
+        # Capture idempotency key — older DBs created before the column existed.
+        "ALTER TABLE ledger ADD COLUMN tool_call_id TEXT",
     ):
         try:
             conn.execute(col_sql)
         except sqlite3.OperationalError:
             pass  # column already exists
+    # Index on tool_call_id is created here (not in schema.sql) so it runs only
+    # after the column is guaranteed to exist on both fresh and older DBs.
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ledger_tool_call_idx ON ledger(tool_call_id)"
+        )
+    except sqlite3.OperationalError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -204,12 +214,14 @@ def insert_ledger_row(
     source: Optional[str] = None,
     ref: Optional[str] = None,
     session_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
 ) -> int:
     conn = _get_conn()
     cur = conn.execute(
-        "INSERT INTO ledger(ts, job_id, kind, amount_usd, source, ref, session_id)"
-        " VALUES(?,?,?,?,?,?,?)",
-        (_now(), job_id, kind, _quantize(amount_usd), source, ref, session_id),
+        "INSERT INTO ledger(ts, job_id, kind, amount_usd, source, ref, session_id,"
+        " tool_call_id) VALUES(?,?,?,?,?,?,?,?)",
+        (_now(), job_id, kind, _quantize(amount_usd), source, ref, session_id,
+         tool_call_id),
     )
     return int(cur.lastrowid)
 
@@ -394,6 +406,155 @@ def link_session(session_id: str, job_id: str) -> None:
         " ON CONFLICT(session_id) DO UPDATE SET job_id=excluded.job_id",
         (session_id, job_id),
     )
+
+
+# ── Durable spend declarations — Capture writes, Enforcement reads (§9.1(c)) ─
+# Passive CRUD only: insert a row, find the open one, mark it consumed. No
+# policy, no cost_center (cc is resolved via get_cost_center_for_job). This is
+# the durable replacement for Enforcement's old in-process correlation cache.
+
+
+@_retry_write
+def insert_declaration(
+    *,
+    job_id: str,
+    projected_usd: float,
+    session_id: Optional[str] = None,
+    ref: Optional[str] = None,
+) -> int:
+    """Record a spend declaration (the intent half of intent→confirmation)."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "INSERT INTO spend_declarations(job_id, session_id, projected_usd, ref,"
+        " declared_at) VALUES(?,?,?,?,?)",
+        (str(job_id), session_id, _quantize(projected_usd), ref, _now()),
+    )
+    return int(cur.lastrowid)
+
+
+def find_open_declaration(
+    *, job_id: Optional[str] = None, session_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Return the newest still-open (unconsumed) declaration matching
+    ``session_id`` (preferred) or ``job_id``. Plain read; None if none open."""
+    conn = _get_conn()
+    if session_id:
+        row = conn.execute(
+            "SELECT * FROM spend_declarations"
+            " WHERE session_id=? AND consumed_at IS NULL"
+            " ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if row is not None:
+            return dict(row)
+    if job_id:
+        row = conn.execute(
+            "SELECT * FROM spend_declarations"
+            " WHERE job_id=? AND consumed_at IS NULL"
+            " ORDER BY id DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        if row is not None:
+            return dict(row)
+    return None
+
+
+@_retry_write
+def mark_declaration_consumed(decl_id: int) -> bool:
+    """Atomically mark a declaration consumed. Guarded by ``consumed_at IS NULL``
+    so only the first caller wins (idempotent); returns True iff this call
+    consumed it."""
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE spend_declarations SET consumed_at=?"
+        " WHERE id=? AND consumed_at IS NULL",
+        (_now(), int(decl_id)),
+    )
+    return cur.rowcount > 0
+
+
+# ── Attribution chain read getters (session → job → cost_center) ─────────────
+
+
+def get_job_for_session(session_id: str) -> Optional[str]:
+    """job_id linked to a Hermes session (via job_sessions), or None."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT job_id FROM job_sessions WHERE session_id=?", (session_id,)
+    ).fetchone()
+    return row["job_id"] if row else None
+
+
+def get_cost_center_for_job(job_id: str) -> Optional[str]:
+    """cost_center_id a job is mapped to (via jobs), or None."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT cost_center_id FROM jobs WHERE job_id=?", (job_id,)
+    ).fetchone()
+    return row["cost_center_id"] if row else None
+
+
+def revenue_recorded(ref: str) -> bool:
+    """True if a revenue ledger row already exists for this ref (the Stripe
+    event/payment id, or the sim ref). Capture's revenue dedup guard — mirrors
+    external_spend_recorded so a duplicate webhook delivery can't double-count.
+    Plain read; no business logic."""
+    if not ref:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM ledger WHERE kind='revenue' AND ref=? LIMIT 1",
+        (ref,),
+    ).fetchone()
+    return row is not None
+
+
+def money_totals() -> Dict[str, float]:
+    """Money totals for the treasury close (rounded to cents). ``revenue`` and
+    ``external_spend`` are summed from the ledger; ``llm_cost`` uses the SAME
+    single basis as ``pnl_by_job`` via ``_total_llm_cost()`` (A1 telemetry when
+    present, else A2 ledger rows — never both; helper lives in the P&L section).
+
+    This is why /pnl and /treasury can never disagree on inference cost: they
+    derive llm_cost from one place. (Renamed from the old ``ledger_money_totals``
+    whose llm_cost was ledger-only and under-counted A1 inference cost.)"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT"
+        " COALESCE(SUM(CASE kind WHEN 'revenue'        THEN amount_usd END), 0.0) AS revenue,"
+        " COALESCE(SUM(CASE kind WHEN 'external_spend' THEN amount_usd END), 0.0) AS external_spend"
+        " FROM ledger"
+    ).fetchone()
+    return {
+        "revenue": round(float(row["revenue"] or 0.0), 2),
+        "llm_cost": _total_llm_cost(),
+        "external_spend": round(float(row["external_spend"] or 0.0), 2),
+    }
+
+
+def cash_position() -> float:
+    """Treasury cash: seed_capital + Σrevenue − llm_cost − Σexternal_spend,
+    rounded to cents (§9.2 close). llm_cost uses the SAME A1/A2 basis as
+    pnl_by_job (via money_totals → _total_llm_cost), NOT a ledger-only sum — so
+    treasury counts A1 inference cost instead of over-stating profit."""
+    t = money_totals()
+    return round(
+        _cfg.seed_capital() + t["revenue"] - t["llm_cost"] - t["external_spend"], 2
+    )
+
+
+def external_spend_recorded(tool_call_id: str) -> bool:
+    """True if an external_spend ledger row already exists for this
+    tool_call_id. Capture's idempotency guard — a replayed post_tool_call must
+    never double-write a confirmed spend."""
+    if not tool_call_id:
+        return False
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM ledger WHERE kind='external_spend' AND tool_call_id=? LIMIT 1",
+        (tool_call_id,),
+    ).fetchone()
+    return row is not None
 
 
 def seed_from_config(path: Optional[str] = None) -> Dict[str, int]:
@@ -890,51 +1051,101 @@ def ledger_snapshot(cost_center_id: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# P&L — joins llm_cost from hermes-telemetry via read-only ATTACH (A1).
+# P&L — llm_cost from hermes-telemetry via read-only ATTACH (A1, §5 primary),
+# with the A2 ledger-row fallback. ONE basis decision, shared by /pnl AND the
+# treasury close so the two can never diverge (MIGRATION_NOTES §8 fix).
 # ---------------------------------------------------------------------------
 
 
-def get_pnl_per_job() -> List[Dict[str, Any]]:
-    """P&L rolled up per job_id.
+def _llm_cost_by_job() -> Dict[str, float]:
+    """Per-job llm_cost under a SINGLE basis — never both (CLAUDE.md §5):
 
-    Combines Argus's own ledger rows with hermes-telemetry's `runs.cost_usd`
-    (joined on session_id) opened read-only. If telemetry.db is absent or
-    unreadable, llm_cost simply contributes $0.
-    """
+      A1 (telemetry.db present): SUM(telemetry.runs.cost_usd) attributed via
+          job_sessions (session → job). Ledger ``llm_cost`` rows are IGNORED in
+          this mode, so a deployment that has BOTH never double-counts.
+      A2 (telemetry.db absent / unreadable): SUM(ledger ``llm_cost`` rows).
+
+    This is the one place llm_cost is derived. ``get_pnl_per_job`` and the
+    treasury close (``_total_llm_cost`` → ``money_totals`` → ``cash_position``)
+    both call it, so /pnl and /treasury always agree on inference cost."""
     conn = _get_conn()
     tele_path = _cfg.telemetry_db_path()
-    attached = False
     if tele_path.exists():
+        attached = False
         try:
             conn.execute(
-                "ATTACH DATABASE ? AS telemetry",
-                (f"file:{tele_path}?mode=ro",),
+                "ATTACH DATABASE ? AS telemetry", (f"file:{tele_path}?mode=ro",)
             )
             attached = True
+            rows = conn.execute(
+                "SELECT js.job_id AS job_id, COALESCE(SUM(r.cost_usd), 0.0) AS c"
+                "  FROM job_sessions js"
+                "  JOIN telemetry.runs r ON r.session_id = js.session_id"
+                " GROUP BY js.job_id"
+            ).fetchall()
+            return {r["job_id"]: round(float(r["c"] or 0.0), 2) for r in rows}
         except sqlite3.Error:
-            # Telemetry DB exists but couldn't be attached (locked, wrong
-            # schema, URI not supported by this sqlite build). Fall back to
-            # the no-telemetry query — better to show $0 LLM cost than 500.
-            attached = False
-    try:
-        rows = conn.execute(_PNL_SQL_WITH_TELE if attached else _PNL_SQL).fetchall()
-    except sqlite3.Error:
-        # If the attached schema doesn't have `runs.cost_usd` / `session_id`,
-        # the WITH_TELE query throws. Retry without telemetry.
-        rows = conn.execute(_PNL_SQL).fetchall()
-    finally:
-        if attached:
-            try:
-                conn.execute("DETACH DATABASE telemetry")
-            except sqlite3.OperationalError:
-                pass
-    return [dict(r) for r in rows]
+            # Telemetry present but unreadable (locked / wrong schema / no URI
+            # support) → fall through to the A2 ledger basis. Never raise.
+            pass
+        finally:
+            if attached:
+                try:
+                    conn.execute("DETACH DATABASE telemetry")
+                except sqlite3.OperationalError:
+                    pass
+    # A2 fallback — llm_cost is a real ledger row.
+    rows = conn.execute(
+        "SELECT job_id, COALESCE(SUM(amount_usd), 0.0) AS c FROM ledger"
+        " WHERE kind='llm_cost' GROUP BY job_id"
+    ).fetchall()
+    return {r["job_id"]: round(float(r["c"] or 0.0), 2) for r in rows}
+
+
+def _total_llm_cost() -> float:
+    """Whole-ledger llm_cost under the single A1/A2 basis (sum of
+    ``_llm_cost_by_job``). The treasury close uses this so cash_position counts
+    A1 inference cost — never the ledger-only sum that over-stated profit."""
+    return round(sum(_llm_cost_by_job().values()), 2)
+
+
+def get_pnl_per_job() -> List[Dict[str, Any]]:
+    """P&L rolled up per job_id: revenue − llm_cost − external_spend.
+
+    ``revenue`` / ``external_spend`` come from Argus's ledger; ``llm_cost`` comes
+    from ``_llm_cost_by_job`` (A1 telemetry via job_sessions when present, else
+    the A2 ledger basis — one basis, never summed). The row set is every job
+    with a ledger row (a job that exists only as orphan telemetry cost is not
+    surfaced — unchanged from the prior ATTACH query)."""
+    conn = _get_conn()
+    led = conn.execute(
+        "SELECT job_id,"
+        " SUM(CASE kind WHEN 'revenue'        THEN amount_usd ELSE 0 END) AS revenue,"
+        " SUM(CASE kind WHEN 'external_spend' THEN amount_usd ELSE 0 END) AS external_spend"
+        " FROM ledger GROUP BY job_id"
+    ).fetchall()
+    llm_by_job = _llm_cost_by_job()
+    rows: List[Dict[str, Any]] = []
+    for r in led:
+        jid = r["job_id"]
+        revenue = float(r["revenue"] or 0.0)
+        external = float(r["external_spend"] or 0.0)
+        llm = float(llm_by_job.get(jid, 0.0))
+        rows.append({
+            "job_id": jid,
+            "revenue": revenue,
+            "llm_cost": llm,
+            "external_spend": external,
+            "pnl": revenue - llm - external,
+        })
+    rows.sort(key=lambda d: d["job_id"])
+    return rows
 
 
 def pnl_by_job() -> List[Dict[str, Any]]:
-    """Canonical P&L surface (CLAUDE.md store API). Same A1/A2 logic as
-    ``get_pnl_per_job`` but with every money column rounded to cents on read
-    to avoid float drift in the summed values."""
+    """Canonical P&L surface (CLAUDE.md store API). Same single-basis logic as
+    ``get_pnl_per_job`` with every money column rounded to cents on read to
+    avoid float drift in the summed values."""
     out = []
     for r in get_pnl_per_job():
         d = dict(r)
@@ -943,48 +1154,3 @@ def pnl_by_job() -> List[Dict[str, Any]]:
                 d[k] = round(float(d[k]), 2)
         out.append(d)
     return out
-
-
-_PNL_SQL = """
-    SELECT job_id,
-           SUM(CASE kind WHEN 'revenue'        THEN amount_usd ELSE 0 END) AS revenue,
-           SUM(CASE kind WHEN 'llm_cost'       THEN amount_usd ELSE 0 END) AS llm_cost,
-           SUM(CASE kind WHEN 'external_spend' THEN amount_usd ELSE 0 END) AS external_spend,
-             SUM(CASE kind WHEN 'revenue'        THEN amount_usd ELSE 0 END)
-           - SUM(CASE kind WHEN 'llm_cost'       THEN amount_usd ELSE 0 END)
-           - SUM(CASE kind WHEN 'external_spend' THEN amount_usd ELSE 0 END) AS pnl
-      FROM ledger
-     GROUP BY job_id
-     ORDER BY job_id
-"""
-
-# When telemetry is attached, fold its per-session cost into llm_cost. The
-# correct attribution chain is telemetry.runs.session_id → job_sessions.session_id
-# → jobs.job_id (NOT ledger.session_id — see MIGRATION_NOTES.md / CLAUDE.md §5 vs §8).
-_PNL_SQL_WITH_TELE = """
-    WITH argus AS (
-        SELECT job_id,
-               SUM(CASE kind WHEN 'revenue'        THEN amount_usd ELSE 0 END) AS revenue,
-               SUM(CASE kind WHEN 'llm_cost'       THEN amount_usd ELSE 0 END) AS llm_cost,
-               SUM(CASE kind WHEN 'external_spend' THEN amount_usd ELSE 0 END) AS external_spend
-          FROM ledger
-         GROUP BY job_id
-    ),
-    tele AS (
-        SELECT js.job_id AS job_id,
-               COALESCE(SUM(r.cost_usd), 0.0) AS llm_cost_tele
-          FROM job_sessions js
-          JOIN telemetry.runs r ON r.session_id = js.session_id
-         GROUP BY js.job_id
-    )
-    SELECT a.job_id AS job_id,
-           a.revenue AS revenue,
-           a.llm_cost + COALESCE(t.llm_cost_tele, 0.0) AS llm_cost,
-           a.external_spend AS external_spend,
-           a.revenue
-             - (a.llm_cost + COALESCE(t.llm_cost_tele, 0.0))
-             - a.external_spend AS pnl
-      FROM argus a
-      LEFT JOIN tele t ON t.job_id = a.job_id
-     ORDER BY a.job_id
-"""

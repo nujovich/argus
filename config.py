@@ -61,6 +61,60 @@ DEFAULT_CONFIG: Dict[str, Budget] = {
 }
 
 
+def seed_capital() -> float:
+    """Starting cash on the treasury balance sheet (CLAUDE.md §9.2 close).
+    Env ``ARGUS_SEED_CAPITAL`` wins, then a top-level ``seed_capital:`` in
+    cost_centers.yaml, else 0.0. Treasury = seed + revenue − all spend."""
+    env = os.environ.get("ARGUS_SEED_CAPITAL")
+    if env is not None:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    path = cost_centers_yaml_path()
+    if path.exists():
+        raw = yaml.safe_load(path.read_text()) or {}
+        if raw.get("seed_capital") is not None:
+            try:
+                return float(raw["seed_capital"])
+            except (TypeError, ValueError):
+                pass
+    return 0.0
+
+
+def stripe_webhook_secret() -> Optional[str]:
+    """The Stripe webhook signing secret (test-mode per §10). Read from env
+    ``ARGUS_STRIPE_WEBHOOK_SECRET`` / ``STRIPE_WEBHOOK_SECRET``. None when
+    unset → the webhook fails closed (cannot verify → reject)."""
+    return (
+        os.environ.get("ARGUS_STRIPE_WEBHOOK_SECRET")
+        or os.environ.get("STRIPE_WEBHOOK_SECRET")
+        or None
+    )
+
+
+def cost_center_for_job(job_id: str, default: str = "default") -> str:
+    """Resolve a job's cost center from cost_centers.yaml's ``jobs:`` map
+    (CLAUDE.md §9 decision 3 / §9.3). Accepts either shorthand
+    ``job_id: cost_center_id`` or extensible ``job_id: {cost_center_id: ...}``.
+
+    Returns the configured center, or ``default`` when the job isn't mapped /
+    no config exists. The point (vs. a blind default) is that a configured job
+    lands on its real center; Capture calls this instead of guessing."""
+    path = cost_centers_yaml_path()
+    if not path.exists():
+        return default
+    raw = yaml.safe_load(path.read_text()) or {}
+    jv = (raw.get("jobs") or {}).get(job_id)
+    if jv is None:
+        return default
+    if isinstance(jv, str):
+        return jv
+    if isinstance(jv, dict):
+        return jv.get("cost_center_id") or default
+    return default
+
+
 def load_budgets() -> Dict[str, Budget]:
     path = cost_centers_yaml_path()
     if not path.exists():
