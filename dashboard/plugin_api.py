@@ -94,6 +94,78 @@ async def treasury() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Fleet — ALL jobs (the dashboard fleet timeline reads this, not /compute/fleet).
+# Superset of /compute/fleet: a cash-only job with no compute allocation MUST
+# appear. All reads; no writes.
+# ---------------------------------------------------------------------------
+
+
+def _jobs_snapshot() -> list:
+    """Every job with ledger activity OR a compute allocation (the union — so
+    this is a strict superset of /compute/fleet). Each row carries per-job P&L,
+    cost center, status, and its latest compute allocation (or None)."""
+    pnl_rows = {r["job_id"]: r for r in db.pnl_by_job()}
+
+    # Latest allocation per job (get_compute_allocations is ordered id DESC, so
+    # the first seen for a job_id is the newest). One query, no N+1.
+    latest_alloc: dict = {}
+    for a in db.get_compute_allocations():
+        latest_alloc.setdefault(a["job_id"], a)
+
+    job_ids = list(pnl_rows.keys())
+    for jid in latest_alloc:
+        if jid not in pnl_rows:
+            job_ids.append(jid)          # allocation-only job (no ledger row yet)
+
+    out = []
+    for jid in job_ids:
+        r = pnl_rows.get(jid)
+        alloc = latest_alloc.get(jid)
+        cc = (alloc["cost_center_id"] if alloc else None) or db.get_cost_center_for_job(jid)
+        out.append({
+            "job_id": jid,
+            "cost_center_id": cc,
+            "revenue": r["revenue"] if r else 0.0,
+            "llm_cost": r["llm_cost"] if r else 0.0,
+            "external_spend": r["external_spend"] if r else 0.0,
+            "margin": r["pnl"] if r else 0.0,
+            # status from the compute allocation when present; cash-only jobs
+            # have no tier, so they read as plain "active".
+            "status": alloc["status"] if alloc else "active",
+            "allocation": alloc,
+        })
+    out.sort(key=lambda d: d["job_id"])
+    return out
+
+
+@router.get("/jobs")
+async def jobs() -> dict:
+    """All jobs (ledger + allocation union) for the fleet timeline."""
+    return {"items": _jobs_snapshot()}
+
+
+# ---------------------------------------------------------------------------
+# Aggregate state — ONE response the SPA polls per tick (instead of ~6 calls).
+# ---------------------------------------------------------------------------
+
+
+@router.get("/state")
+async def state(audit_limit: int = 50) -> dict:
+    """Full dashboard snapshot in a single read. ``eye_state`` is ``holding``
+    when any approval is pending (the Argus eye pauses), else ``watching``."""
+    pending = db.get_pending_approvals()
+    return {
+        "pnl": await pnl(),
+        "treasury": await treasury(),
+        "approvals": {"pending": pending},
+        "audit": {"items": db.get_recent_audit(limit=max(1, min(500, audit_limit)))},
+        "fleet": {"items": _jobs_snapshot()},
+        "tokens": await tokens_active(),
+        "eye_state": "holding" if pending else "watching",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Revenue intake (CLAUDE.md §9.2) — the third P&L input. Two paths:
 #   A) /revenue/sim    — demo-only, no Stripe round-trip
 #   B) /revenue/stripe — REAL webhook, signature-verified (mandatory)
