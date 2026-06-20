@@ -35,9 +35,9 @@ compatibility but is **no longer the P&L bridge**.
 (implemented in `db._PNL_SQL_WITH_TELE`). Per-cost-center rollups derive spend via
 `jobs.cost_center_id` (`db.ledger_snapshot`).
 
-> **TODO for a later doc-only commit (not this session):** update CLAUDE.md §5's
-> join clause to reference `job_sessions` instead of `ledger.session_id`. Do NOT
-> edit CLAUDE.md in the Ledger implementation session.
+> **DONE — folded into CLAUDE.md §5 + §8.** §5 now states the A1 join as
+> `telemetry.runs.session_id → job_sessions.session_id → jobs.job_id` (not
+> `ledger.session_id`); §8 documents the `jobs` / `job_sessions` bridge tables.
 
 ## 2. Two further doc inconsistencies found (record only; do not edit CLAUDE.md now)
 
@@ -52,6 +52,10 @@ compatibility but is **no longer the P&L bridge**.
   brief's "§9.3 cost_centers.yaml job→cost_center mapping" was implemented anyway:
   `seed_from_config` reads an optional top-level `jobs:` map (see
   `cost_centers.sample.yaml`). A later doc commit should formalize this as §9.3.
+
+> **Partially folded into CLAUDE.md §8:** `cost_centers` / `budgets` (plus `jobs`,
+> `job_sessions`, `spend_declarations`) are now in the §8 schema. STILL PENDING:
+> the `jobs:` map is not yet formalized as a numbered §9.3 in CLAUDE.md.
 
 ## 3. Money representation (FLAG for post-hackathon)
 
@@ -88,6 +92,10 @@ budget upserts), and all P&L / snapshot sums are **rounded to 2 dp on read**
 - Capture writing `llm_cost`/revenue/external_spend facts and `link_session` calls.
 
 ## 6. Enforcement layer — §4 wording correction + flagged gaps (do NOT edit CLAUDE.md)
+
+> **Folded into CLAUDE.md:** the "matches terminal commands" correction → §3.1 +
+> §5; the fail-closed invariant → §11 (and §6 marked RESOLVED). The two gaps below
+> were later CLOSED by the Capture layer (see §7).
 
 The Enforcement layer (`enforcement.py`, the `pre_tool_call` gate for real Stripe
 spend) surfaced one doc correction and two gaps:
@@ -132,6 +140,10 @@ The Capture layer (`capture.py` + the durable-declaration store change) closes t
 two gaps §6 flagged and adds the confirmed-spend recorder. New modules/tests:
 `capture.py`, `matchers.py` (shared), `tests/test_capture.py`,
 `tests/test_declarations.py`, `tests/test_matchers.py`, `tests/test_config_cc.py`.
+
+> **Folded into CLAUDE.md:** post_tool_call top-level-kwargs reality + wired-hook
+> note → §5 (Hook system) + §2; `spend_declarations` + `ledger.tool_call_id` → §8;
+> A1-derived llm_cost (Capture never re-measures) → §2 + §8.
 
 - **CHANGE 1 — shared matcher.** The spend-command patterns now live ONLY in
   `matchers.py`. `enforcement.py` re-exports them (`is_spend_command`,
@@ -186,6 +198,10 @@ two gaps §6 flagged and adds the confirmed-spend recorder. New modules/tests:
 Revenue now enters via `dashboard/plugin_api.py` (HTTP, §9.2) — completing
 `revenue − llm_cost − external_spend` as a COMPUTED ledger value. New tests:
 `tests/test_revenue.py`. Only remaining piece is the Dashboard UI.
+
+> **Folded into CLAUDE.md:** revenue intake (`/revenue/sim`, signed
+> `/revenue/stripe`, `unattributed` sentinel, `/pnl` + `/treasury`) → §9 decision
+> 2 + §5; the single llm_cost basis shared by P&L and treasury → §8 (and §5).
 
 - **Two intake paths.** `POST /revenue/sim` (demo-only, `source="stripe-sim"`,
   requires job_id → 400 otherwise) and `POST /revenue/stripe` (real webhook). Both
