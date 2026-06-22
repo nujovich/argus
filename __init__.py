@@ -14,9 +14,9 @@ Two complementary, non-overlapping pre_tool_call gates are registered:
 
 from __future__ import annotations
 
-import capture  # noqa: F401  (plugin dir is on sys.path at runtime)
-import enforcement  # noqa: F401
-import hook  # noqa: F401
+from . import capture
+from . import enforcement
+from . import hook
 
 
 def register(ctx) -> None:

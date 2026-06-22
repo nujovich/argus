@@ -19,7 +19,10 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
 
-import config as _cfg  # plugin dir is on sys.path at runtime
+if __package__:  # package import: Hermes loads the plugin as `argus`
+    from . import config as _cfg
+else:  # flat import: plugin dir on sys.path (tests, standalone)
+    import config as _cfg
 
 
 _local = threading.local()
@@ -869,7 +872,6 @@ def run_compute_integrity_sweep() -> List[Dict[str, Any]]:
         # actual_model, peek at telemetry.runs (best-effort).
         if not observed and d.get("session_id"):
             try:
-                import config as _cfg
                 tele = _cfg.telemetry_db_path()
                 if tele.exists():
                     conn.execute(

@@ -28,9 +28,14 @@ import re
 import time
 from typing import Any, Dict, Optional, Tuple
 
-import db
-import matchers
-import policy
+if __package__:  # package import: Hermes loads the plugin as `argus`
+    from . import db
+    from . import matchers
+    from . import policy
+else:  # flat import: plugin dir on sys.path (tests, standalone)
+    import db
+    import matchers
+    import policy
 
 
 # ── tunables ────────────────────────────────────────────────────────────────

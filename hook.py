@@ -19,9 +19,14 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional, Tuple
 
-import config as _cfg
-import db
-import policy
+if __package__:  # package import: Hermes loads the plugin as `argus`
+    from . import config as _cfg
+    from . import db
+    from . import policy
+else:  # flat import: plugin dir on sys.path (tests, standalone)
+    import config as _cfg
+    import db
+    import policy
 
 
 # The cooperative declaration tool the agent should call.

@@ -39,9 +39,14 @@ import json
 import re
 from typing import Any, Dict, Optional
 
-import config as _cfg
-import db
-import matchers
+if __package__:  # package import: Hermes loads the plugin as `argus`
+    from . import config as _cfg
+    from . import db
+    from . import matchers
+else:  # flat import: plugin dir on sys.path (tests, standalone)
+    import config as _cfg
+    import db
+    import matchers
 
 
 # Shared matcher — single source of truth (CHANGE 1). Re-exported so callers and
