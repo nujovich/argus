@@ -198,52 +198,16 @@ def _process_declaration(
         )
         return None, token
 
-    req_id = db.create_approval_request(
-        job_id=decl.job_id,
-        cost_center_id=decl.cost_center_id,
-        projected_usd=decl.projected_usd,
-        level=decision.level or "finance",
-        tool_name=decl.tool_name,
-        ref=decl.ref,
-    )
+    # Declaration needs approval -> record-only (Option A).
+    # The single gate lives in enforcement, at terminal-execution time.
+    # We log the intent for the audit trail and let the agent proceed.
+    # No auth_token is issued here (that would feed the stripe_* backstop
+    # and open a bypass), so the only real gate stays in enforcement.
     db.log_audit(
-        "system", "approval_requested",
-        {**audit_payload, "approval_id": req_id, "level": decision.level},
+        "system", "declaration_recorded",
+        {**audit_payload, "level": decision.level, "session_id": task_id or None},
     )
-
-    status = _wait_for_decision(
-        req_id, timeout=APPROVAL_TIMEOUT_SEC, poll=POLL_INTERVAL_SEC
-    )
-
-    if status == "approved":
-        token = db.issue_auth_token(
-            job_id=decl.job_id,
-            cost_center_id=decl.cost_center_id,
-            amount_usd=decl.projected_usd,
-            ttl_seconds=AUTH_TOKEN_TTL_SEC,
-            tolerance_pct=AUTH_TOKEN_TOLERANCE,
-            approval_id=req_id,
-        )
-        db.log_audit(
-            "system", "auth_token_issued",
-            {"approval_id": req_id, "job_id": decl.job_id,
-             "amount_usd": decl.projected_usd, "ttl_sec": AUTH_TOKEN_TTL_SEC,
-             "verdict": "HUMAN_APPROVED"},
-        )
-        db.insert_ledger_row(
-            job_id=decl.job_id,
-            kind="external_spend",
-            amount_usd=decl.projected_usd,
-            source="argus_declaration",
-            ref=decl.ref,
-            session_id=task_id or None,
-        )
-        db.log_audit("system", "spend_resumed", {"approval_id": req_id})
-        return None, token
-
-    msg = f"Argus blocked spend ({status}): {decision.reason}"
-    db.log_audit("system", f"spend_{status}", {"approval_id": req_id})
-    return {"action": "block", "message": msg}, None
+    return None, None
 
 
 def _process_stripe_backstop(
