@@ -597,3 +597,21 @@ Closing line for the screencast:
   BLOCK on ANY error (DB, snapshot, Policy — even if the audit write itself
   fails). No matched spend command returns allow without an explicit Policy ALLOW
   or human approval; timeout counts as rejection. (Validated — see §6.)
+
+---
+
+## 12. Plugins: never leave backups inside `~/.hermes/plugins/`
+
+Hermes discovers plugins by scanning EVERY subdirectory containing an
+`__init__.py` inside `~/.hermes/plugins/`. A backup like `argus.bak.MMDDHHMMSS/`
+that still holds its `__init__.py` gets loaded as just another plugin — and can
+win over the real one. (2026-06-21: the gateway loaded
+`argus.bak.0621210220` with the broken code instead of `argus/`. It was the
+final blocker in the whole chain of bugs.)
+
+Rules:
+- No `.bak`, `.old`, copy, or snapshot inside `~/.hermes/plugins/`.
+- If you need to back up a plugin before touching it, move it OUTSIDE the tree
+  (`~/plugin-backups/`, or a tar in `~/`).
+- Check: `find ~/.hermes/plugins -maxdepth 2 -name '__init__.py'`
+  → real plugins only.
