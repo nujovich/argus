@@ -1,73 +1,97 @@
 # Argus
 
-> **Stripe gives the wallet. NemoClaw isolates the process. NVIDIA sells
-> the compute. Argus allocates all three as capital, in real time,
-> toward margin.**
+> **Where cash meets compute, capital becomes margin.**
+>
+> Agents spend. Argus watches. You approve.
 
-Argus Panoptes — the hundred-eyed guardian of Greek myth — reframed for
-the agent era: a hundred eyes on every unit of capital flowing through a
-fleet of autonomous Hermes agents, in **both** currencies that matter —
-cash and compute.
+Argus is a financial control plane for autonomous agents. A Hermes plugin
+that sits **between the agent and its wallet** and gates every dollar
+before it moves — across two fungible capitals at once: **cash** (Stripe)
+and **compute** (NVIDIA Nemotron).
 
-![Argus dashboard — Mermelada Studio commission, real Stripe + Nemotron + defense in depth](docs/pnl-final-real.webp)
+![Argus dashboard — cash + compute tiers, live P&L, approval queue](docs/pnl-final-real.webp)
+
+---
+
+## The problem
+
+> *Your AI agents can spend real money. Who approves it?*
+
+Agents already move real dollars — API calls, inference, SaaS, Stripe.
+The dashboards report **after** the money is gone — and sometimes they
+lie. A well-intentioned agent can burn thousands in a single night:
+`$7,420 unapproved · uncaught @ 02:14 AM` is not a hypothetical.
+
+## The idea
+
+> *Argus gates every dollar before it moves.*
+
+A control plane that sits **between the agent and its wallet** — policy,
+human approval, and real-time P&L on every spend. Five steps, every time:
+
+| 01 Declare spend | 02 Evaluate policy | 03 Approve or escalate | 04 Enforce payment | 05 Record P&L |
+|---|---|---|---|---|
+| Agent states intent to move money before any call fires. | Argus scores the spend against cash & compute tiers. | Auto-approve the trivial, route the serious to a human. | Sits **in-path** and intercepts the real Stripe payment. | Revenue and measured cost booked in real time. |
+
+This is **in-path enforcement — not passive observability**.
 
 ---
 
-## What Argus is
+## Engine 01 — Cash tiering
 
-Argus is the **economic operating system for an AI factory**. It's a
-Hermes plugin that turns a fleet of autonomous agents into a margin-
-aware business.
+> *One config. Three gates.*
 
-Every agent consumes two fungible capitals:
+Every spend is sorted by size. Thresholds live in `cash_policy.yaml` —
+**config-driven, no hardcode**.
 
-- **Cash** — Stripe Skills: buys things, pays per-call APIs, provisions
-  SaaS.
-- **Compute** — NVIDIA Nemotron tokens, NIM inference cycles, GPU.
+```yaml
+cash_tiers:
+  - max: 1.00
+    approve: auto       # Tier 1 — < $1 — the trivial just clears
+  - max: 10.00
+    approve: manager    # Tier 2 — < $10 — a human holds it
+  - max: inf
+    approve: finance    # Tier 3 — > $10 — the highest bar
+```
 
-Today every agent demo treats inference as free or fixed. That's the
-error. Compute *is* money — `hermes-telemetry` already prices Nemotron
-sessions in dollars; Argus reads that ledger directly and governs both
-capitals through one engine:
+- **Tier 1 — auto-approve.** Under a dollar, Argus clears the spend with
+  no human in the loop. Every cent still metered and booked to P&L.
+- **Tier 2 — manager approval.** Approve and the spend clears. Reject
+  and the card is never charged.
+- **Tier 3 — finance approval.** The highest bar. Used for one-shot
+  high-value spends and SaaS provisioning.
 
-1. **Meters** every dollar of cash and compute, per job, into a unified
-   SQLite WAL ledger.
-2. **Allocates** Nemotron tier per job toward margin. High-value jobs
-   earn Ultra. Thin-margin jobs are downgraded to Base, queued, or
-   rejected.
-3. **Throttles mid-flight.** As actual compute burn erodes a job's
-   projected margin, Argus emits a downgrade order; the agent switches
-   to a cheaper model on the next turn.
-4. **Enforces** in two layers on the cash side — the `pre_tool_call`
-   hook (in-process) plus the Stripe Issuing authorization webhook
-   (card network). A rogue agent doesn't get past either.
-5. **Audits** every capital decision in a hash-chained trail. Production-
-   grade evidence for a CFO and an ops team.
+## Engine 02 — Compute tiering
 
-Argus is **horizontal**: it does not care what the agent does. It cares
-that the agent spends capital that must be allocated toward margin and
-controlled.
+> *Argus decides which model a job deserves — by margin.*
 
-## Why it matters
+Compute is money. `hermes-telemetry` already prices Nemotron sessions in
+dollars; Argus reads that ledger directly and routes each job to the
+model its margin earns:
 
-Stripe's own spend controls — per-action ceilings, per-provider caps —
-are **static, per-provider, spend-only** guardrails: a cap knows nothing
-about the job it's serving. Argus operates one level up:
+| Scenario | Revenue | Burn | Margin | Routes to |
+|---|---|---|---|---|
+| **Premium** | $200 | $15 | **+$185** | **ULTRA** — Nemotron 3 Ultra 550B |
+| **Low margin** | $50 | $2 | **+$48** | **BASE** — Nemotron 9B |
+| **Negative** | $0 | $2 | **−$2** | **REJECT** — no model runs |
 
-- **Dynamic** — decisions run against a live ledger, not a fixed
-  ceiling.
-- **Cross-session** — budgets persist across agent runs, not per-call.
-- **Cross-provider** — one cost center spans every Stripe skill and
-  every NVIDIA surface.
-- **Margin-aware** — weighs revenue per job, not just spend.
-- **Auditable** — every human decision recorded.
+> Cash meets compute. **Margin chooses the model.**
 
-Stripe answers *"can this single call afford it?"* Argus answers
-*"is this job still profitable, and who approved the spend?"* — which is
-what enterprises actually need before they let an agent touch their
-wallet.
+Each job is routed to the model its margin earns — Ultra, Base, or
+rejected — and the per-job P&L updates live on the dashboard.
 
 ---
+
+## Built on the rails that matter
+
+| # | Rail | What it does |
+|---|---|---|
+| 01 | **Hermes plugin** | Agent integration via `pre_tool_call` / `post_tool_call` hooks. |
+| 02 | **NVIDIA Nemotron via NIM** | Compute capital — priced per session by `hermes-telemetry`. |
+| 03 | **Stripe** | Cash capital — revenue intake via signature-verified webhooks. |
+| 04 | **In-process enforcement** | The hook fails **closed** — validated against real Stripe Skills. |
+| 05 | **hermes-telemetry (OSS)** | Read-only dependency for in-path cost metering and P&L. |
+| 06 | **Fully config-driven** | YAML cost-centers + tiers — no hardcode. |
 
 ## Architecture — six layers, Ledger at the center
 
@@ -88,48 +112,22 @@ wallet.
 | **Policy** | **Pure function**: `(declaration, snapshot) → Verdict ∈ {ALLOW, NEEDS_APPROVAL, TIER_ASSIGNED, REJECT}`. No I/O, no clock. |
 | **Enforcement** | The hook (Layer 1, in-process) + the Stripe Issuing authorization webhook (Layer 2, card network). Fails **closed**. |
 | **Compute Allocator** | Assigns the Nemotron tier per job, re-evaluates each turn, emits downgrade orders. |
-| **Dashboard** | React tab inside Hermes. Workflow timeline, fleet view, approvals, P&L, token vault, live event stream. |
+| **Dashboard** | React tab inside Hermes. Per-job P&L, fleet total, tier allocations, pending approvals, live event stream. |
 
 **Dependency rule.** Ledger is the center. Policy is pure. Enforcement
 is the only writer of cash decisions; Compute Allocator is the only
 writer of compute-tier decisions. Both write through the same audit
-trail. The full design lives in [`CLAUDE.md`](./CLAUDE.md) — the single
-source of truth.
+trail. Full design in [`CLAUDE.md`](./CLAUDE.md).
 
-## The two enforcement loops
-
-**Cash — two-layer enforcement.**
-
-- *Layer 1 (in-process):* the `pre_tool_call` hook matches spend
-  commands (`stripe projects add/upgrade`, `mpp pay`, `stripe-link-cli`
-  flows) and requires a valid Argus auth token in
-  `args.metadata.argus_auth_token`. No token → BLOCK.
-- *Layer 2 (network):* `POST /webhooks/stripe-issuing-authorization`
-  validates the same token at the card network. Even an agent that
-  bypasses Hermes entirely is declined.
-
-**Compute — two-layer enforcement.**
-
-- *Layer 1 (declaration gate):* the agent calls
-  `argus-request-compute(job_id, expected_revenue_usd, projected_burn_usd)`.
-  Argus assigns a tier (Ultra / Base / Reject) and a compute budget,
-  and returns a token encoding `(model, budget)`.
-- *Layer 2 (integrity sweep):* Argus periodically diffs
-  `hermes-telemetry.runs.model` against what the token authorized. Any
-  mismatch is logged as `compute_integrity_violation`.
-
-Auth tokens are 60-second, single-use, anchored to
-`(job_id, cost_center_id, amount, ±10% tolerance)`.
+---
 
 ## Status
 
 **Engine complete.** The five logic layers (Ledger, Policy, Enforcement,
 Capture, Compute Allocator) plus signature-verified revenue intake are
 implemented and tested — full suite green (162 passing). The React
-Dashboard UI (§7 of [`CLAUDE.md`](./CLAUDE.md)) is the only remaining
-piece.
-
----
+Dashboard UI surfaces in the demo are live; broader fleet view is the
+remaining piece.
 
 ## Run the tests
 
@@ -198,10 +196,24 @@ argus/
 └── tests/
 ```
 
+## Roadmap
+
+- **Runtime compute enforcement** — hard-stop a job mid-flight when burn
+  blows the projection (cooperative downgrade ships today).
+- **Multi-tenant control plane** — one Argus governing a fleet across
+  orgs, with per-tenant cost centers and budgets.
+
+Full post-deadline plan in [`FUTURE.md`](./FUTURE.md).
+
 ## Further reading
 
 - [`CLAUDE.md`](./CLAUDE.md) — design doc and single source of truth.
 - [`DEMO.md`](./DEMO.md) — reproducible demo recipe.
-- [`SUBMISSION.md`](./SUBMISSION.md) — hackathon writeup, with the
-  Mermelada Studio narrative beat by beat.
+- [`SUBMISSION.md`](./SUBMISSION.md) — hackathon writeup, beat by beat.
 - [`FUTURE.md`](./FUTURE.md) — what's explicitly out of scope for v1.
+
+---
+
+> **Agents spend. Argus watches. You approve.**
+>
+> github.com/nujovich/argus · x.com/NUjovich
