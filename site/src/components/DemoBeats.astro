@@ -1,0 +1,73 @@
+---
+const beats = [
+  {
+    title: 'Job A — premium research',
+    skill: 'mpp-agent',
+    body: '$200 commission. Per-call data spend via HTTP 402. Argus assigns Nemotron 3 Ultra; agent burns ~$15. Margin +$185.',
+    color: 'var(--accent-2)',
+  },
+  {
+    title: 'Job B — SaaS provisioning',
+    skill: 'stripe-projects',
+    body: '$3 commission. Argus computes negative margin at Ultra → downgrades to Base. Agent burns $0.30. Margin +$2.70.',
+    color: 'var(--accent)',
+  },
+  {
+    title: 'Job C — one-shot card purchase',
+    skill: 'stripe-link-cli',
+    body: 'Sandbox Link checkout. Compute burn races to $4 mid-flight; Argus emits downgrade_to_base. Agent switches model on next turn.',
+    color: 'var(--accent-2)',
+  },
+  {
+    title: 'Beat 4 — rogue defense',
+    skill: 'cash teeth',
+    body: 'An injected agent tries `stripe projects add` without an auth token. Layer 1 hook blocks. Audit: 🚨 stripe_blocked_no_token.',
+    color: 'var(--danger)',
+  },
+];
+---
+<section id="demo">
+  <div class="container">
+    <span class="eyebrow reveal">The screencast</span>
+    <h2 class="reveal" style="margin-top: 16px;">Three unrelated jobs. One control plane.</h2>
+    <p class="reveal" style="margin-top: 16px; max-width: 60ch;">
+      All three Stripe skills exercised — <span class="mono">mpp-agent</span>,
+      <span class="mono">stripe-projects</span>, <span class="mono">stripe-link-cli</span>
+      — each governed by the same Argus engine.
+    </p>
+
+    <div class="beats" style="margin-top: 48px;">
+      {beats.map((b) => (
+        <article class="beat reveal" style={`--c: ${b.color};`}>
+          <span class="beat-skill mono">{b.skill}</span>
+          <h3 style="margin-top: 12px;">{b.title}</h3>
+          <p style="margin-top: 12px;">{b.body}</p>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .beats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  .beat {
+    padding: 28px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--c);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+  }
+  .beat-skill {
+    font-size: 12px;
+    color: var(--c);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  @media (max-width: 720px) {
+    .beats { grid-template-columns: 1fr; }
+  }
+</style>

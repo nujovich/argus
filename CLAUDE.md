@@ -3,216 +3,342 @@
 > Single source of truth for design decisions in this repo. All future work
 > must respect this document; deviations require an explicit update here.
 >
-> Status: **Phase 1 — design only.** No business logic implemented yet.
-> Phase 2 (skeleton) is pending review of this document.
+> Status: **Engine complete — the Dashboard UI (§7) is the only remaining
+> piece.** The five logic layers (Ledger, Policy, Enforcement, Capture, Compute
+> Allocator) plus Revenue intake (§9 decision 2) are IMPLEMENTED and tested
+> (full suite green: 162 passing). The React Dashboard UI is the sole open item.
 
-Name story: **Argus Panoptes**, the hundred-eyed guardian of Greek myth — a
-hundred eyes on every dollar an autonomous agent spends.
+Name story: **Argus Panoptes**, the hundred-eyed guardian of Greek myth —
+now reframed for the agent era: a hundred eyes on every unit of capital
+flowing through a fleet of autonomous agents, in **both** currencies that
+matter — cash and compute.
 
-Tagline: *Stripe gives agents a wallet; Argus puts a hundred eyes on it.*
+Tagline: *Stripe gives the wallet. NemoClaw isolates the process. NVIDIA
+sells the compute. Argus allocates all three as capital, in real time,
+toward margin.*
 
 ---
 
 ## 1. Product thesis
 
-Argus is a **horizontal financial control plane for money-spending agents**.
+Argus is the **economic operating system for an AI factory**.
 
-When a Hermes agent spends real money via Stripe Skills (buying things, paying
-per-call APIs, provisioning SaaS), Argus:
+Every autonomous agent consumes two fungible capitals:
 
-- **Meters** every dollar in and every dollar out, per job.
-- **Tracks** live P&L per job from a single ledger.
-- **Gates** each spend through a human-in-the-loop (HITL) approval flow when
-  it would breach the budget for its cost center.
+- **Cash** (Stripe — buys things, pays per-call APIs, provisions SaaS).
+- **Compute** (NVIDIA — burns Nemotron tokens, NIM inference cycles, GPU).
 
-Argus is **industry-agnostic**: it does not care what the agent does, only
-that it spends money that must be controlled. The hackathon demo proves
-horizontality by governing three unrelated jobs (a pay-per-call API job, a
-SaaS-provisioning job, and a one-off service purchase) with the **same**
-control layer.
+Today every agent demo treats inference as free or fixed. **That's the
+error.** Compute is money — `hermes-telemetry` already prices Nemotron
+sessions in dollars; Argus reads that ledger directly.
 
-Hackathon north stars (Nous Research × NVIDIA × Stripe, deadline 2026-06-30):
-**usefulness**, **viability**, **presentation**. Every scope decision below
-serves those three.
+Argus's job:
+
+1. **Meters** every dollar of both capitals, per job, into a unified ledger.
+2. **Allocates** compute and cash across a fleet of Hermes agents toward
+   margin. High-value jobs earn premium tiers (Nemotron 3 Ultra on
+   NemoClaw). Low-value jobs get downgraded to a cheaper model, queued,
+   or rejected.
+3. **Throttles mid-flight.** As actual compute burn erodes a job's
+   projected margin, Argus emits a downgrade order; the agent switches
+   to a cheaper model on the next turn. Real compute capital allocation,
+   not a static $/call limit.
+4. **Enforces** with teeth on both layers:
+   - **Cash:** the Stripe Skills hook (Layer 1) + Stripe Issuing
+     authorization webhook (Layer 2). A rogue agent doesn't get past the
+     card network.
+   - **Compute:** the `argus-request-compute` declaration gate +
+     compute-integrity inspection against `hermes-telemetry` (catch when
+     a session said "ok @ Ultra" but silently fell back to a cheaper
+     model — flag the discrepancy).
+5. **Audits** every capital allocation decision in a hash-chained trail.
+   Production-grade evidence for a CFO + ops team.
+
+Argus is **horizontal**: it does not care what the agent does. It cares
+that the agent spends capital that must be allocated toward margin and
+controlled. The hackathon demo proves this by running a **fleet of three
+unrelated jobs** through the same allocator, each with a different
+margin profile and a different compute tier outcome.
+
+Hackathon north stars (Nous Research × NVIDIA × Stripe, deadline
+2026-06-30): **usefulness**, **viability**, **presentation**. The pivot
+to "AI factory OS" hits all three sponsors in their nerve:
+
+- **Stripe**: Argus is the spend governance plane Stripe Skills needs
+  to ship to enterprise (Layer 1 hook + Layer 2 Issuing).
+- **Nous**: Argus governs the Hermes fleet, with `hermes-telemetry` as
+  a read-only data dependency.
+- **NVIDIA**: Argus allocates **compute** as capital. Premium jobs run
+  on Nemotron 3 Ultra. Low-margin jobs get downgraded. NVIDIA is at
+  the center of the value flow — not a passive runtime.
 
 ---
 
 ## 2. Architecture
 
-Five layers. The **Ledger** is the center; **Policy** never writes; only
-**Enforcement** writes runtime state.
+Six layers. The **Ledger** is the center. **Policy** never writes. Only
+**Enforcement** mutates runtime state. The **Compute Allocator** is the
+new mechanism that the AI-factory framing rests on.
 
 | Layer | Role | Writes? | Reads? |
 |---|---|---|---|
-| Capture (instrumentation) | Argus's own Hermes `pre_tool_call` hook; records money in/out via Stripe Skills. Joins LLM cost from `hermes-telemetry`. | Ledger (revenue, llm_cost, external_spend rows) | telemetry.db (read-only) |
-| Ledger (source of truth) | Argus's own SQLite WAL DB. Unified money ledger + cost centers + budgets + approval requests + audit trail. | — (passive store) | — |
-| Policy (the brain / gate) | **Pure function**: `(job, projected_spend, ledger_snapshot) → ALLOW \| NEEDS_APPROVAL(level)`. No I/O. Unit-testable. | nothing | Ledger snapshot |
-| Enforcement (control) | Argus's pre-execution hook. Acts the verdict: `ALLOW` → proceed; `NEEDS_APPROVAL` → block the Stripe command, create the approval request, hold the agent. On human decision → resume or cancel (refund via Stripe on cancel where applicable). **Only layer that writes runtime state.** | Ledger (approval_requests, audit_trail) | Policy verdict |
-| Dashboard (human + observability) | React tab inside the Hermes dashboard. Approval queue (Approve/Reject), P&L view, cost centers, audit trail. | approval decisions (which Enforcement consumes) | Ledger |
+| Capture | `pre_tool_call` + `post_tool_call` hooks + Stripe webhooks / revenue intake (`plugin_api.py`). Only `pre_tool_call`/`post_tool_call` are wired, so session→job linking is lazy inside them. | Ledger (revenue, external_spend, spend_declarations; `llm_cost` only under the A2 fallback — A1 derives it from telemetry), audit | telemetry.db (RO) |
+| Ledger | Argus's SQLite WAL DB. Unified cash + compute ledger, cost centers, budgets, approvals, audit, tokens. | — (passive store) | — |
+| Policy | **Pure function**: `(declaration, snapshot) → Verdict` where Verdict ∈ {ALLOW, NEEDS_APPROVAL(level), TIER_ASSIGNED(model, budget), REJECT}. No I/O, no clock. | nothing | Ledger snapshot |
+| Enforcement | The hook + the Stripe Issuing authorization webhook. **Two layers**: in-process (hook) + network (card auth callback). | Ledger (approvals, audit, tokens) | Policy verdict |
+| Compute Allocator | Decides which Nemotron tier a job is authorized to consume. Re-evaluates each turn as compute burn accrues. Emits downgrade orders. | Ledger (compute_allocations table), audit | Ledger, telemetry.runs |
+| Dashboard | React tab inside Hermes. Workflow timeline + fleet view + approval queue + P&L + token vault + live event stream. | approval decisions | Ledger |
 
 ```
-Capture ─→ Ledger ←─ Policy ←─ Enforcement
-                ↑                      ↕
-            Dashboard ────────────────┘
-   (Capture also reads llm_cost from hermes-telemetry, read-only)
+        Capture ─→ Ledger ←─ Policy ←─ Enforcement
+                     ↑           ↑              ↕
+                     │           │
+                     │     Compute Allocator
+                     │           ↕
+                Dashboard ───────┘
+       (Capture also reads llm_cost from hermes-telemetry, read-only)
 ```
 
-**Dependency rule.** Ledger is the center; every layer reads from it.
-Policy is pure (no writes). Enforcement is the **only** layer that mutates
-runtime state during a request. This makes the system simulable: feed any
-historical ledger snapshot into Policy and reproduce the verdict.
+**Dependency rule.** Ledger is the center. Policy is pure. Enforcement
+is the only runtime-state writer for cash decisions; Compute Allocator
+is the only writer for compute-tier decisions. Both write through the
+same audit trail.
 
 ### Architecture stance — own plugin, own repo
 
-Argus is its **own** Hermes plugin in its **own** repo. It does **not** add
-code to the existing `hermes-telemetry` plugin. It consumes `hermes-telemetry`
-as a **read-only data dependency** (for the already-priced LLM token cost)
-and otherwise talks to Hermes directly (hooks, dashboard plugin SDK, Stripe
-Skills). `hermes-telemetry` stays 100% untouched.
+Argus is its **own** Hermes plugin in its **own** repo. It does **not**
+add code to the existing `hermes-telemetry` plugin. It consumes
+`hermes-telemetry` as a **read-only data dependency** (for per-session
+Nemotron pricing) and otherwise talks to Hermes directly (hooks,
+dashboard plugin SDK, Stripe Skills).
 
 ---
 
-## 3. HITL approval flow
+## 3. The two enforcement loops
 
-**Threshold routing by cost center**, configurable:
+### 3.1 Cash — two-layer enforcement
+
+Same as before; the existing implementation is the foundation. Summary:
+
+- **Layer 1 (in-process):** the `pre_tool_call` hook gates real spend. Because
+  the Stripe skills run through the **`terminal`** tool (no bespoke tools), the
+  canonical gate matches `tool_name=="terminal"` + a spend **command** pattern
+  (`stripe projects add`/`upgrade`, `mpp pay`) — see §5. A complementary backstop
+  matches `stripe_*` tool calls and requires a valid Argus auth token in
+  `args.metadata.argus_auth_token`; without it → block.
+- **Layer 2 (network):** `POST /webhooks/stripe-issuing-authorization`
+  validates the auth token at the card network. Even an agent that
+  bypasses Hermes entirely is declined.
+
+See §6 for token semantics.
+
+### 3.2 Compute — two-layer enforcement
+
+The new mechanism. Symmetric to cash:
+
+- **Layer 1 (declaration gate):** the agent calls
+  `argus-request-compute(job_id, expected_revenue_usd, projected_burn_usd)`
+  before starting an LLM-heavy operation. Argus assigns a tier:
+
+  | Verdict | Output |
+  |---|---|
+  | `TIER_ULTRA` | model = `nvidia/nemotron-3-ultra-550b-a55b`, compute_budget = projected_burn (margin-justified) |
+  | `TIER_BASE` | model = `nvidia/nemotron-3-base-9b` (or equivalent cheap NVIDIA), compute_budget = capped |
+  | `NEEDS_APPROVAL_MANAGER` | over compute-budget threshold for the cost center |
+  | `REJECT` | margin would be negative |
+
+  The agent must use the assigned model. The auth token returned
+  encodes the model + budget; subsequent Nemotron API calls are
+  validated against it.
+
+- **Layer 2 (compute integrity):** Argus periodically diffs
+  `hermes-telemetry.runs.model` against what its tokens authorized.
+  Any mismatch (Hermes silently fell back to a cheaper model, or an
+  agent ran on a tier it wasn't authorized for) is logged as
+  `compute_integrity_violation` in the audit trail and surfaced on the
+  dashboard. *This is the "silent fallback" defense the user already
+  has detection for in another context — it ports directly.*
+
+### 3.3 Mid-flight downgrade (compute throttling)
+
+The job declares `(expected_revenue, projected_burn)` at start. Argus
+allocates a tier and a compute_budget. As the agent runs and telemetry
+accumulates `llm_cost` against the job's `session_id`, Argus
+recomputes:
+
+```
+margin_so_far = revenue_so_far - llm_cost_so_far - external_spend_so_far
+burn_ratio    = llm_cost_so_far / projected_burn
+```
+
+Thresholds (configurable per cost center):
+
+- `burn_ratio > 0.7` and `tier == Ultra` → emit `downgrade_to_base`
+  order. The agent reads `GET /jobs/{job_id}/status` each turn and
+  switches model on the next turn.
+- `margin_so_far < 0` → emit `kill` order. The agent pauses; the human
+  decides whether to approve continuation or terminate.
+
+This is the line that wins the NVIDIA pillar: **Argus allocates GPU as
+capital, in real time, mid-flight.**
+
+---
+
+## 4. HITL approval flow
+
+Threshold routing per cost center, configurable. Cash and compute use
+the same approval queue (different verdict types).
 
 | Tier | Action |
 |---|---|
-| Small spend (≤ low threshold) | Auto-approve |
-| Medium spend | Route to manager |
-| Large spend (> high threshold) | Route to finance |
+| Small spend (≤ low threshold) / margin-justified Ultra | Auto-approve |
+| Medium spend / Ultra above projected budget | Route to manager |
+| Large spend / Ultra requested on low-margin job | Route to finance |
 
-**Hold semantics** preserve agent state; on approval, execution resumes from
-the exact pre-spend point. On rejection, the spend is cancelled cleanly; if a
-charge already settled (rare in the gated path) Argus issues a Stripe refund.
+Hold semantics preserve agent state; on approval, execution resumes
+from the exact pre-spend or pre-inference point. On rejection, the
+agent gets a structured block and self-corrects (smaller spend, cheaper
+tier, different approach).
 
-**Enterprise differentiator vs Stripe's per-action limit:** Stripe Skills'
-built-in limit is a static $/call ceiling. Argus is **dynamic** (against a
-live ledger), **cross-session** (budgets persist across agent runs),
-**margin-aware** (decisions consider revenue per job, not just spend),
-**observable** (P&L, audit trail), and produces an **auditable record** of
-every human decision — what enterprises actually need to let an agent touch
-their wallet.
+**Enterprise differentiator vs Stripe's native spend controls:** Stripe's
+own controls have grown — beyond the static $/call per-action ceiling, Stripe
+Projects now offers per-provider spend caps, and Stripe has announced a
+forthcoming data layer so providers can meter and bill agent-built software.
+But these remain **static, per-provider, spend-only** guardrails: a cap knows
+nothing about the job it's serving. Argus operates one level up. It is
+**dynamic** (decisions run against a live ledger, not a fixed ceiling),
+**cross-session** (budgets persist across agent runs, not per-call),
+**cross-provider** (one cost center spans every Stripe skill, not a silo per
+vendor), **margin-aware** (it weighs revenue per job, not just spend),
+**observable** (live P&L and audit trail), and produces an **auditable record**
+of every human decision. Stripe answers "can this single call afford it?";
+Argus answers "is this job still profitable, and who approved the spend?" —
+which is what enterprises actually need to let an agent touch their wallet.
 
 ---
 
-## 4. Reuse / dependency map
+## 5. Reuse / dependency map
 
 **From `hermes-telemetry` (READ-ONLY, zero code changes there):**
 
 - DB path: `~/.hermes/telemetry/telemetry.db` (WAL, schema v5).
-- Table `runs(session_id PRIMARY KEY, model, provider, tokens_in, tokens_out,
-  cost_usd REAL, started_at, ended_at, ...)`. Argus joins on `session_id`.
-- Access pattern: open via SQLite URI in read-only mode
-  (`file:.../telemetry.db?mode=ro`). WAL allows concurrent readers without
-  blocking the writer. Never write, never `ATTACH ... AS rw`.
+- Table `runs(session_id PRIMARY KEY, model, provider, tokens_in,
+  tokens_out, cost_usd REAL, started_at, ended_at, status, ...)`.
+- Access via SQLite URI read-only mode
+  (`file:.../telemetry.db?mode=ro&uri=true`). WAL allows concurrent
+  readers without blocking the writer.
+- The `model` column is the input to Argus's compute-integrity check
+  (compare what the agent ran on vs what the token authorized).
+- **A1 P&L join (primary).** `runs.cost_usd` attributes to a job via the
+  **`job_sessions` bridge**: `telemetry.runs.session_id → job_sessions.session_id
+  → jobs.job_id` — NOT `ledger.session_id` (the `ledger` carries `job_id`, not a
+  session bridge). The bridge tables `jobs` / `job_sessions` are part of Argus's
+  own schema (§8).
 
 **From Hermes Agent directly (Argus's own plugin surfaces):**
 
-- **Hook system** — `register_hook("pre_tool_call", fn)` via the plugin
-  `register(ctx)` entrypoint. Callback signature:
-  `fn(tool_name: str, args: dict, task_id: str, **kwargs)`.
-- **Block primitive** — return `{"action": "block", "message": "..."}` from
-  `pre_tool_call`; the agent short-circuits the tool and the `message` is
-  returned to the model as an error. See §6 for the action-gating decision.
-- **Dashboard plugin SDK** — `window.__HERMES_PLUGIN_SDK__` (React, hooks,
-  shadcn components, `api`, `fetchJSON`, `utils.cn`, theme CSS vars) and
-  `window.__HERMES_PLUGINS__.register(name, Component)`.
-- **Stripe Skills for Hermes** — the surface agents call to actually spend.
-  Argus's hook matches the Stripe-skill tool name(s) on `pre_tool_call`.
-- **Runtime** — Nemotron 3 Ultra / NemoClaw (no changes needed; Argus is
-  model-agnostic).
+- **Hook system** — `register_hook("pre_tool_call", fn)` (the sync-block gating
+  primitive, §6) and `register_hook("post_tool_call", fn)` (Capture's
+  confirmed-spend recorder). Only `pre_tool_call` and `post_tool_call` are wired;
+  `on_session_start`/`on_session_end` and `pre`/`post_llm_call` are NOT — so all
+  session→job linking happens lazily inside the wired hooks. Hermes passes the
+  payload as TOP-LEVEL kwargs (`tool_name`, `args`, `result`, `task_id`,
+  `session_id`, `tool_call_id`, `status`, …), never under `extra.*`.
+- **Skills** — `argus-request-spend` and `argus-request-compute` ship
+  as local Hermes skills the agent invokes via the `terminal` tool to
+  curl Argus's API.
+- **Dashboard plugin SDK** — `window.__HERMES_PLUGIN_SDK__` (React +
+  hooks + shadcn components + theme CSS vars + `fetchJSON`).
+- **Stripe Skills for Hermes** — the surface Argus intercepts. These skills run
+  through the **`terminal`** tool (they register no bespoke tools), so the
+  `pre_tool_call` hook matches `tool_name=="terminal"` + a spend **command**
+  pattern — NOT bespoke tool names: `stripe projects add` / `stripe projects
+  upgrade` (`stripe-projects`), `mpp pay` (`mpp-agent`, per-call / HTTP 402 path),
+  and `stripe-link-cli` card/checkout flows (sandbox Link accounts work from
+  anywhere — see §10). The shared patterns live in `matchers.py`; a `stripe_*`
+  tool-name matcher remains as a defense-in-depth backstop.
+- **Runtime** — Nemotron 3 Ultra via NVIDIA's API (configured by the
+  user in `hermes model`). NemoClaw is the safe-execution
+  environment a production deployment would run inside.
 
 **NEW, built in Argus:**
 
-- Dollar ledger (revenue + external_spend rows).
-- Pure policy gate.
-- Approval queue + cost-center config + budgets.
-- P&L + audit trail dashboard.
+- Dollar ledger (revenue + llm_cost + external_spend rows).
+- Attribution bridge + durable intent: `cost_centers`, `budgets`, `jobs`,
+  `job_sessions`, `spend_declarations` (see §8).
+- Pure policy gate (cash verdicts + compute tier verdicts).
+- Approval queue + cost-center config + dual-currency budgets.
+- Auth tokens (short-lived, single-use, validated at hook + Issuing).
+- Revenue intake (`/revenue/sim` + signature-verified `/revenue/stripe`) +
+  read surfaces (`/pnl`, `/treasury`) — see §9 decision 2.
+- Compute Allocator (Phase 4.5).
+- Fleet view + workflow timeline + P&L + token vault dashboard.
 
 ---
 
-## 5. Cost-data wiring — the ATTACH decision
+## 6. Action-gating primitive — synchronous hold inside the hook
 
-We need the already-priced LLM cost from `hermes-telemetry` to join into
-Argus's P&L. Two options:
+The whole HITL flow depends on blocking the Stripe spend before it
+settles, holding until a human decides, then resuming. Phase 0
+investigation in `NousResearch/hermes-agent` confirmed:
 
-- **A1 (primary).** At P&L query time, open Argus's DB and `ATTACH DATABASE
-  'file:~/.hermes/telemetry/telemetry.db?mode=ro' AS telemetry`, then join
-  `argus.ledger.session_id = telemetry.runs.session_id`. Zero code in
-  `hermes-telemetry`. Read-only across the WAL boundary.
-- **A2 (demo-safe fallback).** In Argus's `pre_tool_call` (or
-  `on_session_end`) hook, read `runs.cost_usd` for the current session and
-  insert an `llm_cost` row into Argus's own ledger. P&L is then a single-DB
-  query. This is ETL of a fact, **not** re-measurement of tokens — telemetry
-  remains the source of truth for cost.
+- A plugin can register `pre_tool_call`, fired immediately before any
+  tool executes.
+- Returning `{"action": "block", "message": "..."}` short-circuits
+  execution. The agent does not run the tool; `message` is returned
+  to the model as an error.
 
-**Decision: pick A1.** A2 stays documented for demo-day fragility.
-
----
-
-## 6. Action-gating primitive — ⚠️ the riskiest unknown, resolved
-
-The whole HITL flow depends on being able to **block the Stripe spend before
-it settles, hold until a human decides, then resume**. Phase 0 investigation
-in `NousResearch/hermes-agent` confirmed:
-
-- A plugin can register `pre_tool_call`, which fires **immediately before**
-  any tool executes (`agent/tool_executor.py`,
-  `agent/agent_runtime_helpers.py`).
-- Returning `{"action": "block", "message": "..."}` short-circuits execution.
-  The agent does not run the tool; `message` is returned to the model as an
-  error string. *Source: `website/docs/user-guide/features/hooks.md` and
-  `hermes_cli/plugins.py`.*
-
-**What Hermes does NOT provide:** a native async "hold this pending action,
-park the agent, resume the exact call when a human answers" primitive. Block
-is one-shot and synchronous-return.
+**What Hermes does NOT provide:** a native async "hold this pending
+action, park the agent, resume the exact call when a human answers"
+primitive. Block is one-shot and synchronous-return.
 
 **What Argus does instead — synchronous hold inside the hook.** The
-`pre_tool_call` callback itself blocks: it enqueues the approval request,
-then **synchronously waits** (polling Argus's own DB with a short interval
-and a configurable timeout) for the human decision. On decision:
+`pre_tool_call` callback itself blocks: it enqueues the approval
+request, then **synchronously waits** (polling Argus's own DB with a
+short interval and a configurable timeout) for the human decision. On
+decision:
 
-- **Approve** → return `None` (or any non-block value). Hermes proceeds to
-  execute the Stripe skill exactly as if the hook were a no-op.
-- **Reject / timeout** → return `{"action": "block", "message": "<reason>"}`.
-  The agent receives the rejection as an error and can self-correct.
+- **Approve** → issue auth token, return `None`. Hermes proceeds.
+- **Reject / timeout** → return `{"action": "block", "message": ...}`.
 
-This gives us a real hold/resume without modifying Hermes core. Trade-offs
-are explicit:
+**Status: RESOLVED.** Path A (the in-process Python poll above) is implemented in
+`enforcement.py` and validated live. Crucially, Hermes fails **OPEN** if a
+`pre_tool_call` hook raises — which is exactly why Enforcement fails **CLOSED**: a
+matched spend command is wrapped in try/except and returns BLOCK on ANY error. See
+the fail-closed invariant in §11.
 
-- The hook thread is parked for the approval duration. Acceptable: this is a
-  human-gated path, not a hot loop, and Hermes's tool-execution path is
-  per-call.
-- Hermes turn-level timeouts (if any) bound the approval window. We will
-  surface a configurable timeout (default 5 min for the demo) and treat
-  timeout as implicit rejection.
-- If a future Hermes release adds a richer "park + resume" API, Argus can
-  swap implementations behind the same `Policy → Enforcement` interface
-  without changing the ledger or dashboard.
+For **compute**, the same primitive applies through the declaration
+skill (`argus-request-compute` calls the same gate via `/sim/spend`
+or its compute equivalent endpoint). The agent's subsequent Nemotron
+call carries the auth token in metadata; if it doesn't, the Stripe-
+side Layer 2 (Issuing webhook for cash) and the compute-integrity
+check (audit trail diff against telemetry) catch it.
 
-**This finding is design-load-bearing.** If during implementation we discover
-the hook thread cannot block long enough, the fallback is the demo-safe
-A2-style flow: pre-declare projected spend, decide BEFORE the spend tool is
-invoked at all (e.g. via a thin `request_spend(...)` skill the agent must
-call first), and gate at that layer.
+### Auth tokens (defense in depth)
+
+Every ALLOW issues a 60-second single-use token, anchored to
+(job_id, cost_center_id, amount, ±10% tolerance). The token is
+validated:
+
+- At the in-process hook (Layer 1) for every `stripe_*` tool call.
+- At the Issuing authorization webhook (Layer 2) for every card auth
+  request from Stripe.
+- At the compute-integrity check (post-hoc) for every priced telemetry
+  session — if the model differs from what the token authorized, it's
+  a violation.
 
 ---
 
 ## 7. View-layer stack (LOCKED)
 
-- React, no app framework. **No Next.js** (no SSR, no router, no standalone
-  app).
-- Bundler: **esbuild**, single IIFE output at `dashboard/dist/index.js`.
+- React, no app framework. **No Next.js**.
+- Bundler: **esbuild**, single IIFE at `dashboard/dist/index.js`.
 - Mounting: reads `window.__HERMES_PLUGIN_SDK__` for React + hooks +
-  components; calls `window.__HERMES_PLUGINS__.register("argus", <Component>)`.
-- Styling: SDK theme CSS variables only (`--color-card`,
-  `--color-primary`, `--color-destructive`, `--radius`, etc.). **No
-  hardcoded colors.**
-- Data: `dashboard/plugin_api.py` (FastAPI router), routes mounted at
+  components; registers via `window.__HERMES_PLUGINS__.register("argus", <Component>)`.
+- Styling: SDK theme CSS variables only. **No hardcoded colors.**
+- Data: `dashboard/plugin_api.py` (FastAPI), routes at
   `/api/plugins/argus/`.
-- Live updates: **polling 1–2s** for the demo. SSE is a stretch goal only.
+- Live updates: **polling 0.8s–1.5s** for the demo. SSE is a stretch.
 
 Install layout (matches the official example):
 
@@ -221,68 +347,117 @@ Install layout (matches the official example):
 ├── dashboard/
 │   ├── manifest.json
 │   ├── dist/
-│   │   ├── index.js     # built IIFE — never hand-edited
+│   │   ├── index.js     # built IIFE
 │   │   └── style.css    # optional
 │   └── plugin_api.py
-├── plugin.yaml          # Argus's Hermes plugin manifest (Python side)
-└── __init__.py          # register(ctx) entrypoint (Phase 2: stub)
+├── plugin.yaml          # Hermes plugin manifest (Python side)
+└── __init__.py          # register(ctx) entrypoint
 ```
 
 Rescan after install: `GET /api/dashboard/plugins/rescan`.
 
+### Dashboard surfaces (Phase 4 + 4.5)
+
+Single tab, workflow-first. Top to bottom:
+
+1. **Fleet timeline** — every active job's stage progression. Pulses
+   on stage change. Color-tinted (pending / human-required / done /
+   rejected / blocked).
+2. **Start commission + Reset demo** — single-click controls.
+3. **Live P&L tiles** — Revenue, LLM cost (Nemotron-priced), External
+   spend, Net P&L. Animated number-tick on changes.
+4. **Per-tier compute allocation widget** (Phase 4.5) — for each
+   active job, current tier (Ultra / Base / Reject), compute_budget,
+   actual burn, burn ratio, downgrade-order state.
+5. **Approval queue** — cash + compute approvals, pulsing cards.
+6. **Active auth tokens** — defense in depth visible.
+7. **Live event stream** — audit trail with color-coded badges
+   (REVENUE / APPROVED / REJECTED / 🚨 rogue blocked /
+   compute_tier_assigned / compute_integrity_violation / etc).
+
 ---
 
-## 8. Planned ledger schema (DESIGN ONLY — implemented next session)
+## 8. Planned ledger schema (IMPLEMENTED + Phase 4.5 extensions)
+
+Already in code:
 
 ```sql
 CREATE TABLE ledger (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT    NOT NULL,                -- ISO-8601
+    ts          TEXT    NOT NULL,
     job_id      TEXT    NOT NULL,
     kind        TEXT    NOT NULL CHECK (kind IN
                   ('revenue', 'llm_cost', 'external_spend')),
     amount_usd  REAL    NOT NULL,
-    source      TEXT,                            -- stripe | openrouter | nim | ...
-    ref         TEXT                             -- stripe payment id, model id, etc.
+    source      TEXT,
+    ref         TEXT,
+    session_id  TEXT,
+    tool_call_id TEXT          -- Capture idempotency key: dedups confirmed external_spend
 );
-CREATE INDEX ledger_job_idx ON ledger(job_id);
 
+CREATE TABLE approval_requests (...);   -- pending / approved / rejected / timeout
+CREATE TABLE audit_trail (...);
+CREATE TABLE auth_tokens (...);          -- 60s single-use, defense in depth
+```
+
+Attribution bridge + durable declarations (in code; reconciles §5's
+`session → job → cost_center` chain — there was no session↔job↔cost_center
+bridge in the original §8):
+
+```sql
 CREATE TABLE cost_centers (
     id          TEXT PRIMARY KEY,
-    label       TEXT NOT NULL
+    label       TEXT,
+    created_at  TEXT NOT NULL
 );
-
 CREATE TABLE budgets (
-    cost_center_id  TEXT PRIMARY KEY REFERENCES cost_centers(id),
-    limit_usd       REAL NOT NULL,
-    soft_threshold  REAL NOT NULL DEFAULT 0.8,   -- warn at 80%
+    cost_center_id          TEXT PRIMARY KEY REFERENCES cost_centers(id),
+    limit_usd               REAL NOT NULL,
+    soft_threshold          REAL NOT NULL DEFAULT 0.8,
     auto_approve_under_usd  REAL NOT NULL DEFAULT 0.0,
-    manager_under_usd       REAL                 -- NULL → straight to finance above auto threshold
+    manager_under_usd       REAL
+    -- + optional Phase 4.5 compute-tier columns (ultra_model, base_model, …)
 );
-
-CREATE TABLE approval_requests (
-    id              TEXT PRIMARY KEY,            -- uuid
-    created_at      TEXT NOT NULL,
-    job_id          TEXT NOT NULL,
-    cost_center_id  TEXT NOT NULL,
-    projected_usd   REAL NOT NULL,
-    status          TEXT NOT NULL CHECK (status IN
-                      ('pending','approved','rejected','timeout')),
-    decided_at      TEXT,
-    decided_by      TEXT,
-    reason          TEXT
+CREATE TABLE jobs (
+    job_id          TEXT PRIMARY KEY,
+    cost_center_id  TEXT NOT NULL REFERENCES cost_centers(id),
+    created_at      TEXT NOT NULL
 );
-
-CREATE TABLE audit_trail (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts          TEXT NOT NULL,
-    actor       TEXT NOT NULL,                   -- 'agent' | 'human:<id>' | 'system'
-    event       TEXT NOT NULL,                   -- 'spend_attempted', 'approval_requested', 'approved', ...
-    payload     TEXT                             -- JSON
+CREATE TABLE job_sessions (          -- the A1 P&L bridge: session → job
+    session_id  TEXT PRIMARY KEY,    -- telemetry.runs.session_id / task_id
+    job_id      TEXT NOT NULL REFERENCES jobs(job_id)
+);
+CREATE TABLE spend_declarations (    -- durable intent; Capture writes, Enforcement reads
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id        TEXT NOT NULL,
+    session_id    TEXT,
+    projected_usd REAL NOT NULL,
+    ref           TEXT,
+    declared_at   TEXT NOT NULL,
+    consumed_at   TEXT             -- NULL until the confirmed spend consumes it
 );
 ```
 
-P&L per job:
+Phase 4.5 additions (compute allocator):
+
+```sql
+CREATE TABLE compute_allocations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL,
+    job_id          TEXT NOT NULL,
+    tier            TEXT NOT NULL CHECK (tier IN ('ultra','base','reject')),
+    model           TEXT NOT NULL,
+    compute_budget  REAL NOT NULL,
+    expected_revenue REAL,
+    expected_margin REAL,
+    status          TEXT NOT NULL CHECK (status IN
+                      ('active','downgraded','killed','done')),
+    auth_token      TEXT
+);
+CREATE INDEX compute_alloc_job_idx ON compute_allocations(job_id);
+```
+
+P&L per job (unchanged):
 
 ```sql
 SELECT job_id,
@@ -293,63 +468,150 @@ SELECT job_id,
  GROUP BY job_id;
 ```
 
-`llm_cost` is populated under A1 by joining `telemetry.runs` via ATTACH at
-query time; under A2 it's an actual ledger row written by Capture.
+`llm_cost` is **derived**, not stored, under A1 (the §5 primary): a single
+helper joins `telemetry.runs.cost_usd` via the `job_sessions` bridge with a
+read-only `ATTACH` at query time. Under A2 (no `telemetry.db`) it falls back to
+summing `llm_cost` ledger rows — **never both bases at once**. That SAME helper
+feeds per-job P&L (`pnl_by_job`, exposed at `/pnl`) and the treasury close
+(`cash_position` / `/treasury`), so the two can never disagree on inference cost.
 
-**Attribution chain:** `session → job → cost_center`. Sessions come from
-Hermes (`task_id` / telemetry `session_id`); `job_id` is declared by the
-agent (or derived from cron job id); `cost_center_id` is mapped from
-`job_id` via config. This gives per-center chargeback and per-center
-budgets.
+**Attribution chain:** `session → job → cost_center → compute_tier`.
+Sessions come from Hermes (`task_id` / telemetry `session_id`);
+`job_id` is declared by the agent; `cost_center_id` is mapped via
+config; `compute_tier` is assigned by Argus and validated against
+telemetry post-hoc.
 
 ---
 
-## 9. Three open design decisions
+## 9. Design decisions
 
-These remain **OPEN** with a current leaning; lock them in the next session.
+**LOCKED:**
 
-1. **How is `projected_usd` known before the spend?**
-   Options: (a) parse the Stripe-skill `args` for an amount, (b) read an
-   HTTP 402 challenge response, (c) require the agent to call a thin
-   `request_spend(job_id, projected_usd, ref)` skill first.
-   **Leaning: (c)** for the demo — explicit declaration is robust, demo-able,
-   and survives Stripe API surface drift.
+1. `projected_usd` for cash comes from explicit
+   `argus-request-spend(...)` declarations the agent makes. Same shape
+   for `expected_revenue` + `projected_burn` for compute via
+   `argus-request-compute(...)`.
+2. Revenue enters via real Stripe webhooks (Payment Link in TEST
+   mode for the demo; production via Stripe Connect). **BUILT** (`plugin_api.py`):
+   the signature-verified `POST /revenue/stripe` webhook (HMAC-SHA256 over the
+   `Stripe-Signature` header — invalid/missing signature → 400, no row written)
+   plus the demo-only `POST /revenue/sim`. Both idempotent on `ref`. Revenue with
+   no `metadata.job_id` is booked to an `unattributed` sentinel job so treasury
+   stays correct without polluting per-job P&L. Read surfaces: `/pnl`, `/treasury`.
+3. `session → job → cost_center → compute_tier` is the unified
+   attribution chain.
+4. Auth tokens are 60-second single-use, anchored to amount + job.
+5. The compute tier ladder for v1: Ultra (Nemotron 3 Ultra 550B) /
+   Base (any cheaper Nemotron / NIM / openrouter equivalent) /
+   Reject. Bigger ladders are Phase 5.
 
-2. **How does revenue enter the ledger?**
-   In Stripe TEST mode, a Stripe webhook (or a simple simulation script for
-   the demo) writes a `revenue` row tied to a `job_id`. The webhook receiver
-   lives under `plugin_api.py`.
+**OPEN, decide before Phase 4.5 ships:**
 
-3. **How is a spend tied to a cost center?**
-   Via the `session → job → cost_center` chain. `job_id` is supplied by the
-   agent in step 1 above; the mapping `job_id → cost_center_id` is read from
-   a config file shipped with the plugin (`cost_centers.yaml`).
+6. **Compute-integrity inspection cadence.** Real-time (every audit
+   trail write) vs periodic (every 30s sweep). Lean: periodic, with
+   immediate post-job inspection on `spend_resumed`.
+7. **Mid-flight downgrade enforcement.** Cooperative (agent reads
+   `/jobs/{job_id}/status`, switches models) vs hard kill (block
+   next `stripe_*` or compute auth). Lean: cooperative for v1,
+   document hard kill as Phase 5.
 
 ---
 
 ## 10. Hackathon constraints (non-functional)
 
-- **Stripe Link CLI is US-only** → use **Stripe TEST/sandbox mode** for every
-  demo flow. No production keys.
-- **Submission deadline: 2026-06-30** → scope is **LOCKED** to what this
-  document describes. No features beyond §1–§9. New ideas land in a
-  `FUTURE.md`, not in code.
-- **Demo script:** three unrelated jobs — pay-per-call API, provision+pay
-  SaaS, one-off service purchase — all governed by the **same** Argus
-  control plane. Climactic beat: an approval card appears in the dashboard
-  and a human Approves/Rejects in real time, the agent visibly resumes (or
-  cancels) from the held tool call.
+- **Stripe Link CLI is US-only in production** → use **Stripe TEST/sandbox
+  mode** for every demo flow. Sandbox Link accounts can be created with any
+  valid email (no US requirement), so `auth login` works from anywhere; the
+  US-only barrier is on production Link accounts only. No production keys.
+- **Submission deadline: 2026-06-30** → scope is **LOCKED** to what
+  this document describes. New ideas land in [`FUTURE.md`](./FUTURE.md).
+- **Screencast landing page lives in [`site/`](./site/)** — standalone
+  Astro + GSAP static site. Not part of the Hermes plugin; the
+  "no Next.js / no bundled React / theme vars only" rules in §7 apply to
+  `dashboard/` only and do not constrain `site/`.
+
+### Demo script — the AI factory floor
+
+Three jobs from an autonomous AI services firm, each with a different
+margin profile. All governed by the same Argus.
+
+- **Job A — premium enterprise research ($200 commission)**.
+  Per-call data spend via **`mpp-agent`** (HTTP 402 → `mpp pay`).
+  Agent calls `argus-request-compute(expected_revenue=200, projected_burn=15)`.
+  Argus assigns **Nemotron 3 Ultra**. Agent runs deep multi-turn
+  research, consumes ~$15 of Ultra inference, delivers, **margin +$185
+  visible in P&L with Nemotron-priced LLM column**.
+- **Job B — SaaS provisioning ($3 commission)**.
+  Cash spend via **`stripe-projects`** (`stripe projects add
+  <provider>/<service>`). Agent calls
+  `argus-request-compute(expected_revenue=3, projected_burn=5)`. Argus
+  computes negative margin → **downgrades to Base tier**. Audit:
+  `compute_tier_downgraded`. Agent runs on cheap model, consumes
+  $0.30, delivers, margin +$2.70. Beat narrative: *"the agent didn't
+  get to burn $5 of Ultra on a $3 job."*
+- **Job C — one-shot card purchase, mid-flight throttle**.
+  Cash spend via **`stripe-link-cli`** (sandbox Link account; card /
+  checkout flow). Agent declared `projected_burn=$5` for the
+  surrounding research / copy work, but actual compute burn races to
+  $4 while only halfway through. Argus emits `downgrade_to_base`.
+  Agent switches model on next turn. Audit: `mid_flight_throttle`.
+- **Beat 4 — cash teeth (rogue defense)**.
+  An adversarial scenario: an injected agent tries to issue a
+  `stripe projects add` without an auth token. Layer 1 hook blocks.
+  Audit: `🚨 stripe_blocked_no_token`. *"The card network declines
+  what Argus didn't authorize, even if the agent goes around
+  Hermes."*
+
+Closing line for the screencast:
+
+> **Stripe gives the wallet. NemoClaw isolates the process. NVIDIA
+> sells the compute. Argus allocates all three as capital, in real
+> time, toward margin. Deploy it on DGX Spark.**
+
+### NVIDIA pillar — earned, not decorative
+
+| Pillar | How Argus earns it |
+|---|---|
+| **Nemotron 3 Ultra** | Allocated as the **premium tier** for high-margin jobs. Real cost, surfaced in P&L via `hermes-telemetry` ATTACH. |
+| **NemoClaw** | Production deployment target. Argus's plugin runs identically inside a NemoClaw sandbox — `0-line code change`. Documented in `FUTURE.md` as the operational path. |
+| **NVIDIA agent skills + NIM** | The cheap-tier compute target. Job B routes here when margin is too thin for Ultra. NIM inference credits also show up as `external_spend` rows. |
 
 ---
 
 ## 11. Guardrails for future sessions
 
-- **Never modify `hermes-telemetry`.** It is a read-only dependency.
-- **Never bundle React.** Always use `window.__HERMES_PLUGIN_SDK__.React`.
+- **Never modify `hermes-telemetry`.** Read-only dependency.
+- **Never bundle React.** Use `window.__HERMES_PLUGIN_SDK__.React`.
 - **Never hardcode colors.** Use SDK theme CSS variables only.
-- **Policy stays pure.** No I/O, no clock, no randomness — inputs in,
-  verdict out. This is what lets us unit-test the brain.
-- **Only Enforcement writes runtime state.** Capture writes facts; everything
-  else reads.
-- **If the official Hermes example contradicts this document, the example
-  wins** — update this doc in the same commit.
+- **Policy stays pure.** No I/O, no clock, no randomness. Inputs in,
+  verdict out. Unit-testable.
+- **Only Enforcement + Compute Allocator write runtime state.**
+  Capture writes facts; everything else reads.
+- **If the official Hermes example contradicts this document, the
+  example wins** — update this doc in the same commit.
+- **Both currencies, one engine.** Anything that meters or gates only
+  cash or only compute is a regression. The unified ledger + dual
+  verdict types are the architectural invariant.
+- **Financial gates fail CLOSED.** Hermes fails OPEN if a `pre_tool_call` hook
+  raises, so Enforcement wraps a matched spend command in try/except and returns
+  BLOCK on ANY error (DB, snapshot, Policy — even if the audit write itself
+  fails). No matched spend command returns allow without an explicit Policy ALLOW
+  or human approval; timeout counts as rejection. (Validated — see §6.)
+
+---
+
+## 12. Plugins: never leave backups inside `~/.hermes/plugins/`
+
+Hermes discovers plugins by scanning EVERY subdirectory containing an
+`__init__.py` inside `~/.hermes/plugins/`. A backup like `argus.bak.MMDDHHMMSS/`
+that still holds its `__init__.py` gets loaded as just another plugin — and can
+win over the real one. (2026-06-21: the gateway loaded
+`argus.bak.0621210220` with the broken code instead of `argus/`. It was the
+final blocker in the whole chain of bugs.)
+
+Rules:
+- No `.bak`, `.old`, copy, or snapshot inside `~/.hermes/plugins/`.
+- If you need to back up a plugin before touching it, move it OUTSIDE the tree
+  (`~/plugin-backups/`, or a tar in `~/`).
+- Check: `find ~/.hermes/plugins -maxdepth 2 -name '__init__.py'`
+  → real plugins only.

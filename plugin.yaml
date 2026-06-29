@@ -1,0 +1,8 @@
+name: argus
+version: "0.0.1"
+description: "Argus — horizontal financial control plane for money-spending agents. Meters every dollar, tracks live P&L per job, and gates Stripe spends through a HITL approval flow."
+author: nujovich
+kind: standalone
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call

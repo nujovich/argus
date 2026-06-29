@@ -1,0 +1,16 @@
+{
+  "name": "argus-site",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone marketing / screencast landing page for Argus. Not part of the Hermes plugin.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^4.16.0",
+    "gsap": "^3.12.5"
+  }
+}

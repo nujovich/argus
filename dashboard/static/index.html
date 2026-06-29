@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Argus — economic OS for an AI factory</title>
+    <style>
+      /* ── Brand tokens (mirror of site/src/styles/global.css) ───────────── */
+      :root {
+        --bg: #08090b;
+        --bg-elev: #0f1115;
+        --fg: #e8eaed;
+        --fg-dim: #9aa3ad;
+        --line: #1f232b;
+        --cash: #ffcb47;      /* cash / amber */
+        --compute: #76e89a;   /* compute / silver-green */
+        --danger: #ff6b6b;    /* breach */
+        --radius: 14px;
+        --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, "Inter", "Helvetica Neue", Arial, sans-serif;
+        /* state-driven accent — overwritten on #hero[data-state] below */
+        --state: var(--compute);
+        --aura: 16px;
+        --glass: rgba(15, 17, 21, 0.6);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0; padding: 0;
+        background: var(--bg); color: var(--fg);
+        font-family: var(--sans);
+        font-feature-settings: "ss01", "cv11";
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+      .mono { font-family: var(--mono); }
+
+      /* ── Topbar ────────────────────────────────────────────────────────── */
+      .topbar {
+        position: sticky; top: 0; z-index: 20;
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; padding: 16px 24px;
+        background: rgba(8, 9, 11, 0.78);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--line);
+      }
+      .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+      .wordmark {
+        font-weight: 600; font-size: 19px; letter-spacing: 0.06em;
+        background: linear-gradient(90deg, var(--cash), var(--compute));
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent; color: var(--cash);
+      }
+      .brand .sub {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em;
+        text-transform: uppercase; color: var(--fg-dim);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .pills { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+      .pill {
+        display: inline-flex; align-items: center; gap: 7px;
+        font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+        text-transform: uppercase; padding: 6px 11px;
+        border: 1px solid var(--line); border-radius: 999px;
+        color: var(--fg-dim); white-space: nowrap;
+      }
+      .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+      .pill.live   { color: var(--compute); border-color: rgba(118, 232, 154, 0.4); }
+      .pill.demo   { color: var(--cash); border-color: rgba(255, 203, 71, 0.4); }
+      .pill.reconnecting { color: var(--fg-dim); border-color: var(--line); }
+      .pill.state  { color: var(--state); border-color: color-mix(in srgb, var(--state) 45%, var(--line)); }
+      .pill.live .dot { animation: livepulse 1.7s infinite; }
+      .pill.reconnecting .dot { animation: reconpulse 1.1s ease-in-out infinite; }
+      @keyframes reconpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+      @keyframes livepulse {
+        0%   { box-shadow: 0 0 0 0 rgba(118, 232, 154, 0.5); }
+        70%  { box-shadow: 0 0 0 8px rgba(118, 232, 154, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(118, 232, 154, 0); }
+      }
+
+      /* ── Section scaffolding ───────────────────────────────────────────── */
+      section { padding: 40px 0; border-bottom: 1px solid var(--line); }
+      .eyebrow {
+        display: inline-block; font-family: var(--mono); font-size: 11px;
+        color: var(--fg-dim); letter-spacing: 0.16em; text-transform: uppercase;
+        padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+      }
+      h2 { margin: 0; font-size: clamp(20px, 3vw, 28px); font-weight: 600; letter-spacing: -0.02em; }
+      .sec-head { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; flex-wrap: wrap; }
+
+      .grid { display: grid; gap: 14px; }
+      .tile {
+        padding: 18px; border: 1px solid var(--line); border-radius: var(--radius);
+        background: var(--glass); backdrop-filter: blur(8px);
+      }
+      .tile .label {
+        font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--fg-dim);
+      }
+      .tile .num { margin-top: 10px; font-size: 26px; font-weight: 600; font-family: var(--mono); }
+      .tile .num.sm { font-size: 20px; }
+      .pos { color: var(--compute); }
+      .neg { color: var(--danger); }
+      .amber { color: var(--cash); }
+
+      /* ── Hero ──────────────────────────────────────────────────────────── */
+      #hero { position: relative; padding: 44px 0 36px; }
+      #hero[data-state="watching"] { --state: var(--compute); --aura: 14px; }
+      #hero[data-state="holding"]  { --state: var(--cash);    --aura: 24px; }
+      #hero[data-state="breach"]   { --state: var(--danger);  --aura: 38px; }
+
+      .hero-inner { display: grid; grid-template-columns: 1.05fr 1fr; gap: 28px; align-items: center; }
+      .hero-copy h1 {
+        margin: 14px 0 0; font-size: clamp(30px, 4.4vw, 50px);
+        line-height: 1.05; letter-spacing: -0.025em; font-weight: 600;
+      }
+      .hero-copy h1 .cash { color: var(--cash); }
+      .hero-copy h1 .gpu  { color: var(--compute); }
+      .tagline { margin-top: 16px; max-width: 46ch; line-height: 1.55; color: var(--fg-dim); }
+
+      /* state motif: two reaching hands + contact spark */
+      .motif { width: 100%; height: auto; display: block; }
+      .motif .arm-cash { stroke: var(--cash); }
+      .motif .arm-gpu  { stroke: var(--compute); }
+      .motif .tip-cash { fill: var(--cash); }
+      .motif .tip-gpu  { fill: var(--compute); }
+      .motif .contact {
+        fill: var(--state);
+        transition: fill 0.5s ease;
+        filter: drop-shadow(0 0 var(--aura) var(--state));
+        animation: sparkpulse 2.4s ease-in-out infinite;
+      }
+      .motif .halo {
+        fill: var(--state); opacity: 0.16; transition: fill 0.5s ease;
+        animation: halopulse 2.4s ease-in-out infinite;
+      }
+      /* invisible pupil kept for compatibility with any state binding */
+      .pupil { fill: var(--state); opacity: 0; }
+      @keyframes sparkpulse {
+        0%, 100% { transform: scale(1); }
+        50%      { transform: scale(1.18); }
+        transform-origin: center;
+      }
+      @keyframes halopulse {
+        0%, 100% { opacity: 0.10; transform: scale(1); }
+        50%      { opacity: 0.22; transform: scale(1.25); }
+      }
+      .motif g.spark { transform-box: fill-box; transform-origin: center; }
+
+      /* ── P&L per job table ─────────────────────────────────────────────── */
+      .table-wrap { border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; background: var(--glass); }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 560px; }
+      thead th {
+        text-align: right; font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--fg-dim); font-weight: 500;
+        padding: 13px 16px; border-bottom: 1px solid var(--line); white-space: nowrap;
+      }
+      thead th:first-child, tbody td:first-child { text-align: left; }
+      tbody td { padding: 13px 16px; border-bottom: 1px solid var(--line); text-align: right; font-family: var(--mono); }
+      tbody tr:last-child td { border-bottom: none; }
+      tbody td.job { color: var(--fg); font-family: var(--mono); }
+      .empty { padding: 28px 16px; text-align: center; color: var(--fg-dim); font-family: var(--mono); font-size: 13px; }
+
+      /* ── Approvals ─────────────────────────────────────────────────────── */
+      .ap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+      .ap-card {
+        border: 1px solid var(--line); border-left: 3px solid var(--state);
+        border-radius: var(--radius); background: var(--glass); padding: 18px;
+        animation: cardpulse 2.2s ease-in-out infinite;
+      }
+      @keyframes cardpulse {
+        0%, 100% { border-left-color: var(--state); }
+        50%      { border-left-color: color-mix(in srgb, var(--state) 45%, transparent); }
+      }
+      .ap-card .ap-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+      .ap-amt { font-size: 24px; font-weight: 600; font-family: var(--mono); color: var(--state); }
+      .ap-level {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+        padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--state);
+      }
+      .ap-meta { margin-top: 12px; display: grid; gap: 5px; font-family: var(--mono); font-size: 12px; color: var(--fg-dim); }
+      .ap-meta b { color: var(--fg); font-weight: 500; }
+      .ap-actions { margin-top: 16px; display: flex; gap: 10px; }
+      .act {
+        flex: 1; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+        font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+        border: 1px solid var(--line); background: transparent; color: var(--fg);
+        transition: background 0.15s, border-color 0.15s, transform 0.1s;
+      }
+      .act:hover { transform: translateY(-1px); }
+      .act.approve { color: var(--compute); border-color: rgba(118, 232, 154, 0.45); }
+      .act.approve:hover { background: rgba(118, 232, 154, 0.12); }
+      .act.reject { color: var(--danger); border-color: rgba(255, 107, 107, 0.45); }
+      .act.reject:hover { background: rgba(255, 107, 107, 0.12); }
+      .act:disabled { opacity: 0.45; cursor: default; transform: none; }
+
+      .all-clear {
+        border: 1px dashed var(--line); border-radius: var(--radius);
+        padding: 30px 16px; text-align: center; color: var(--fg-dim);
+        font-family: var(--mono); font-size: 13px; letter-spacing: 0.04em;
+      }
+      .all-clear .ok { color: var(--compute); }
+
+      /* ── Compute allocations (Phase 4.5) ───────────────────────────────── */
+      .cmp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+      .cmp-card {
+        border: 1px solid var(--line); border-left: 3px solid var(--compute);
+        border-radius: var(--radius); background: var(--glass); padding: 18px;
+      }
+      .cmp-card.is-reject { border-left-color: var(--danger); }
+      .cmp-card.is-base   { border-left-color: var(--cash); }
+      .cmp-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+      .cmp-tier {
+        font-family: var(--mono); font-size: 11px; font-weight: 600;
+        letter-spacing: 0.12em; text-transform: uppercase;
+        padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line);
+      }
+      .cmp-tier.ultra  { color: var(--compute); border-color: rgba(118, 232, 154, 0.45); }
+      .cmp-tier.base   { color: var(--cash);    border-color: rgba(255, 203, 71, 0.45); }
+      .cmp-tier.reject { color: var(--danger);  border-color: rgba(255, 107, 107, 0.45); }
+      .cmp-margin { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+      .cmp-margin.pos { color: var(--compute); }
+      .cmp-margin.neg { color: var(--danger); }
+      .cmp-model {
+        margin-top: 12px; font-family: var(--mono); font-size: 12px;
+        color: var(--fg); word-break: break-all;
+      }
+      .cmp-model i { color: var(--fg-dim); font-style: normal; }
+      .cmp-meta { margin-top: 12px; display: grid; gap: 5px; font-family: var(--mono); font-size: 12px; color: var(--fg-dim); }
+      .cmp-meta b { color: var(--fg); font-weight: 500; }
+      .cmp-int {
+        font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+        padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--fg-dim);
+      }
+      .cmp-int.ok        { color: var(--compute); border-color: rgba(118, 232, 154, 0.45); }
+      .cmp-int.violation { color: var(--danger);  border-color: rgba(255, 107, 107, 0.45); }
+
+      /* ── Audit feed ────────────────────────────────────────────────────── */
+      .feed { display: grid; gap: 2px; }
+      .feed-row {
+        display: grid; grid-template-columns: auto auto 1fr; gap: 12px; align-items: center;
+        padding: 11px 14px; border: 1px solid transparent; border-radius: 10px; font-size: 13px;
+      }
+      .feed-row:nth-child(odd) { background: rgba(255, 255, 255, 0.018); }
+      .feed-ts { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); white-space: nowrap; }
+      .feed-badge {
+        font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+        padding: 3px 8px; border-radius: 6px; color: var(--bg); white-space: nowrap; font-weight: 600;
+      }
+      .feed-text { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; }
+      .feed-text b { color: var(--fg); font-weight: 500; font-family: var(--mono); }
+
+      footer { padding: 28px 0 40px; color: var(--fg-dim); font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; }
+
+      :focus-visible { outline: 2px solid var(--state); outline-offset: 2px; border-radius: 4px; }
+
+      /* ── Responsive ────────────────────────────────────────────────────── */
+      @media (max-width: 860px) {
+        .hero-inner { grid-template-columns: 1fr; }
+        .hero-motif { order: -1; max-width: 420px; margin: 0 auto; }
+      }
+      @media (max-width: 420px) {
+        .wrap { padding: 0 16px; }
+        .topbar { padding: 12px 16px; flex-wrap: wrap; }
+        .brand .sub { display: none; }
+        .tile .num { font-size: 22px; }
+        .ap-grid { grid-template-columns: 1fr; }
+        .cmp-grid { grid-template-columns: 1fr; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pill.live .dot, .pill.reconnecting .dot, .motif .contact, .motif .halo, .ap-card { animation: none !important; }
+        .act, .motif .contact, .motif .halo { transition: none !important; }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="wordmark">ARGUS</span>
+        <span class="sub">economic OS · cash + compute</span>
+      </div>
+      <div class="pills">
+        <span id="livePill" class="pill demo"><span class="dot"></span><span id="liveText">demo</span></span>
+        <span id="statePill" class="pill state"><span class="dot"></span><span id="stateText">watching</span></span>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <!-- ── Hero ─────────────────────────────────────────────────────── -->
+      <section id="hero" data-state="watching">
+        <div class="hero-inner">
+          <div class="hero-copy">
+            <span class="eyebrow">The economic OS for an AI factory</span>
+            <h1>Where <span class="cash">cash</span> meets <span class="gpu">compute</span>, capital becomes margin.</h1>
+            <p class="tagline">Argus meters every dollar of both currencies an autonomous fleet
+              burns, and allocates them as capital toward margin — in real time, with a human
+              in the loop and an auditable trail of every decision.</p>
+          </div>
+
+          <div class="hero-motif">
+            <!-- Two hands reaching; the contact spark is the state indicator. -->
+            <svg class="motif" viewBox="0 0 460 280" role="img"
+                 aria-label="Two hands reaching toward a point of contact; the spark colour signals system state.">
+              <defs>
+                <linearGradient id="gCash" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#ffcb47" stop-opacity="0.15"/>
+                  <stop offset="1" stop-color="#ffcb47" stop-opacity="0.95"/>
+                </linearGradient>
+                <linearGradient id="gGpu" x1="1" y1="0" x2="0" y2="0">
+                  <stop offset="0" stop-color="#76e89a" stop-opacity="0.15"/>
+                  <stop offset="1" stop-color="#76e89a" stop-opacity="0.95"/>
+                </linearGradient>
+              </defs>
+
+              <!-- cash hand (amber, reaching from the left) -->
+              <path class="arm-cash" d="M20 232 C 120 224, 168 176, 214 142"
+                    fill="none" stroke="url(#gCash)" stroke-width="6" stroke-linecap="round"/>
+              <circle class="tip-cash" cx="214" cy="142" r="6.5"/>
+
+              <!-- compute hand (green, reaching from the right) -->
+              <path class="arm-gpu" d="M440 232 C 340 224, 292 176, 246 142"
+                    fill="none" stroke="url(#gGpu)" stroke-width="6" stroke-linecap="round"/>
+              <circle class="tip-gpu" cx="246" cy="142" r="6.5"/>
+
+              <!-- contact spark — state-driven -->
+              <g class="spark">
+                <circle class="halo" cx="230" cy="140" r="34"/>
+                <circle class="contact" cx="230" cy="140" r="9"/>
+                <circle class="pupil" cx="230" cy="140" r="3"/>
+              </g>
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Treasury ─────────────────────────────────────────────────── -->
+      <section id="treasury">
+        <div class="sec-head"><span class="eyebrow">Treasury</span><h2>Cash position</h2></div>
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+          <div class="tile" style="grid-column: span 2;">
+            <div class="label">Cash position</div>
+            <div class="num" id="t-cash">—</div>
+          </div>
+          <div class="tile"><div class="label">Seed capital</div><div class="num sm" id="t-seed">—</div></div>
+          <div class="tile"><div class="label">Gross revenue</div><div class="num sm amber" id="t-grev">—</div></div>
+          <div class="tile"><div class="label">Total spend</div><div class="num sm" id="t-spend">—</div></div>
+          <div class="tile"><div class="label">Net P&amp;L</div><div class="num sm" id="t-netpnl">—</div></div>
+        </div>
+      </section>
+
+      <!-- ── P&L total ────────────────────────────────────────────────── -->
+      <section id="pnl">
+        <div class="sec-head"><span class="eyebrow">P&amp;L</span><h2>Fleet total</h2></div>
+        <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+          <div class="tile"><div class="label">Revenue</div><div class="num sm amber" id="p-rev">—</div></div>
+          <div class="tile"><div class="label">External spend</div><div class="num sm" id="p-ext">—</div></div>
+          <div class="tile"><div class="label">LLM cost · Nemotron</div><div class="num sm" id="p-llm">—</div></div>
+          <div class="tile"><div class="label">Net P&amp;L</div><div class="num sm" id="p-pnl">—</div></div>
+        </div>
+      </section>
+
+      <!-- ── P&L per job ──────────────────────────────────────────────── -->
+      <section id="jobs-sec">
+        <div class="sec-head"><span class="eyebrow">P&amp;L</span><h2>Per job</h2><span class="eyebrow" id="jobcount">0 jobs</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Job</th><th>Revenue</th><th>External</th><th>LLM</th><th>P&amp;L</th></tr>
+            </thead>
+            <tbody id="jobs"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ── Compute allocations (Phase 4.5) ──────────────────────────── -->
+      <section id="compute-sec">
+        <div class="sec-head"><span class="eyebrow">Compute</span><h2>Tier allocations</h2><span class="eyebrow" id="cmpcount">0 active</span></div>
+        <div id="cmp-body" class="cmp-grid"></div>
+      </section>
+
+      <!-- ── Approvals ────────────────────────────────────────────────── -->
+      <section id="approvals">
+        <div class="sec-head"><span class="eyebrow">HITL</span><h2>Pending approvals</h2><span class="eyebrow" id="apcount">0 pending</span></div>
+        <div id="ap-body" class="ap-grid"></div>
+      </section>
+
+      <!-- ── Audit trail ──────────────────────────────────────────────── -->
+      <section id="audit-sec" style="border-bottom: none;">
+        <div class="sec-head"><span class="eyebrow">Audit</span><h2>Live event stream</h2></div>
+        <div id="audit" class="feed"></div>
+      </section>
+
+      <footer>
+        ARGUS · Stripe gives the wallet · NVIDIA sells the compute · Argus allocates both as capital, toward margin.
+      </footer>
+    </main>
+
+    <script>
+      // ── Network contract (validated — do not change) ──────────────────────
+      const STATE_URL = "/api/plugins/argus/state";
+      const decideURL = (id) => `/api/plugins/argus/approvals/${id}/decide`;
+      const POLL_MS = 2500;
+
+      // ── Embedded mock: the validated $79 finance/BREACH demo ──────────────
+      function freshMock() {
+        const now = new Date();
+        const t = (sBack) => new Date(now.getTime() - sBack * 1000).toISOString();
+        return {
+          eye_state: "holding",
+          pnl: {
+            jobs: [
+              { job_id: "default", revenue: 0, llm_cost: 0.01, external_spend: 79.00, pnl: -79.01 },
+            ],
+            total: { revenue: 0, llm_cost: 0.01, external_spend: 79.00, pnl: -79.01 },
+          },
+          treasury: {
+            seed_capital: 200, gross_revenue: 0, total_spend: 79.01,
+            net_pnl: -79.01, cash_position: 120.99,
+          },
+          approvals: {
+            pending: [
+              {
+                id: "mock-79", created_at: t(8), job_id: "default", cost_center_id: "default",
+                projected_usd: 79.00, level: "finance", status: "breach",
+                tool_name: "terminal", ref: "stripe projects add openai/gpt-image-1",
+              },
+            ],
+          },
+          fleet: {
+            items: [
+              {
+                job_id: "default", cost_center_id: "default", revenue: 0, llm_cost: 0.01,
+                external_spend: 79.00, margin: -79.01, status: "active",
+                allocation: {
+                  tier: "ultra", model: "nvidia/nemotron-3-ultra-550b-a55b",
+                  compute_budget_usd: 15.00, expected_revenue_usd: 200.00,
+                  expected_margin_usd: 185.00, job_id: "default",
+                  integrity_status: null, downgrade_reason: null,
+                },
+              },
+            ],
+          },
+          audit: {
+            items: [
+              { ts: t(6),  actor: "policy",       event: "needs_approval_finance", payload: { projected_usd: 79.00, cost_center_id: "default" } },
+              { ts: t(7),  actor: "agent:default", event: "spend_declared",         payload: { projected_usd: 79.00, ref: "stripe projects add" } },
+              { ts: t(14), actor: "argus",         event: "compute_tier_assigned",   payload: { tier: "ultra", model: "nvidia/nemotron-3-ultra-550b-a55b" } },
+              { ts: t(21), actor: "telemetry",     event: "llm_cost_metered",        payload: { amount_usd: 0.01, session: "sess-default" } },
+            ],
+          },
+        };
+      }
+
+      let mock = freshMock();
+      let usingMock = false;
+
+      // ── Helpers ───────────────────────────────────────────────────────────
+      const $ = (id) => document.getElementById(id);
+      const money  = (n) => (Number(n) < 0 ? "-$" : "$") + Math.abs(Number(n) || 0).toFixed(2);
+      const signed = (n) => (Number(n) >= 0 ? "+$" : "-$") + Math.abs(Number(n) || 0).toFixed(2);
+      const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      function hhmmss(ts) {
+        try { const d = new Date(ts); return isNaN(d.getTime()) ? String(ts) : d.toLocaleTimeString("en-GB", { hour12: false }); }
+        catch { return String(ts); }
+      }
+
+      // ── State derivation (no new business logic) ──────────────────────────
+      // eye_state ∈ {watching, holding}; a third "breach" reading when a pending
+      // hold is finance-level or carries a breach status.
+      function deriveState(data) {
+        const pending = (data.approvals && data.approvals.pending) || [];
+        const breach = pending.some((p) => p.level === "finance" || p.status === "breach");
+        if (breach) return "breach";
+        return data.eye_state === "holding" ? "holding" : "watching";
+      }
+
+      // ── Audit badge colour by event keyword ───────────────────────────────
+      function badge(event) {
+        const e = String(event || "").toLowerCase();
+        if (/reject|block|breach|violation|kill|decline|deny/.test(e)) return getCss("--danger");
+        if (/approve|allow|margin|revenue|resume|done|metered/.test(e)) return getCss("--compute");
+        if (/hold|needs_approval|downgrad|throttle|burn|warn|declared|assigned/.test(e)) return getCss("--cash");
+        return getCss("--fg-dim");
+      }
+      const getCss = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim() || "#9aa3ad";
+      const compact = (o) => {
+        if (o == null) return "";
+        if (typeof o !== "object") return String(o);
+        return Object.entries(o).map(([k, v]) => `${k}=${typeof v === "number" ? v : esc(v)}`).join(" · ");
+      };
+
+      // ── Render ─────────────────────────────────────────────────────────────
+      function render(data) {
+        const state = deriveState(data);
+        const hero = $("hero");
+        hero.dataset.state = state;
+        // keep .pupil radius binding alive for any state-driven hook
+        const pupil = hero.querySelector(".pupil");
+        if (pupil) pupil.setAttribute("r", state === "breach" ? "5" : state === "holding" ? "4" : "3");
+
+        $("stateText").textContent = state;
+        $("statePill").style.setProperty("--state", "var(--state)");
+        $("stateText").parentElement.style.color = "var(--state)";
+
+        // Treasury
+        const tr = data.treasury || {};
+        $("t-cash").textContent = money(tr.cash_position);
+        $("t-seed").textContent = money(tr.seed_capital);
+        $("t-grev").textContent = money(tr.gross_revenue);
+        $("t-spend").textContent = money(tr.total_spend);
+        setSigned($("t-netpnl"), tr.net_pnl);
+
+        // P&L total
+        const tot = (data.pnl && data.pnl.total) || {};
+        $("p-rev").textContent = money(tot.revenue);
+        $("p-ext").textContent = money(tot.external_spend);
+        $("p-llm").textContent = money(tot.llm_cost);
+        setSigned($("p-pnl"), tot.pnl);
+
+        // P&L per job
+        const jobs = (data.pnl && data.pnl.jobs) || [];
+        $("jobcount").textContent = jobs.length + (jobs.length === 1 ? " job" : " jobs");
+        $("jobs").innerHTML = jobs.length
+          ? jobs.map((j) => `
+              <tr>
+                <td class="job">${esc(j.job_id)}</td>
+                <td class="amber">${money(j.revenue)}</td>
+                <td>${money(j.external_spend)}</td>
+                <td>${money(j.llm_cost)}</td>
+                <td class="${Number(j.pnl) >= 0 ? "pos" : "neg"}">${signed(j.pnl)}</td>
+              </tr>`).join("")
+          : `<tr><td class="empty" colspan="5">No jobs yet</td></tr>`;
+
+        // Compute allocations (Phase 4.5) — from fleet.items where allocation != null
+        const fleet = (data.fleet && data.fleet.items) || [];
+        const allocs = fleet.filter((f) => f.allocation);
+        $("cmpcount").textContent = allocs.length + " active";
+        $("cmp-body").innerHTML = allocs.length
+          ? allocs.map((f) => {
+              const a = f.allocation;
+              const tier = String(a.tier || "—").toLowerCase();
+              const m = Number(a.expected_margin_usd);
+              const integ = a.integrity_status;
+              return `
+              <div class="cmp-card is-${esc(tier)}">
+                <div class="cmp-top">
+                  <span class="cmp-tier ${esc(tier)}">${esc(a.tier || "—")}</span>
+                  <span class="cmp-margin ${m >= 0 ? "pos" : "neg"}">margin ${signed(a.expected_margin_usd)}</span>
+                </div>
+                <div class="cmp-model">${a.model ? esc(a.model) : "<i>no model — rejected</i>"}</div>
+                <div class="cmp-meta">
+                  <span>job <b>${esc(a.job_id)}</b></span>
+                  <span>budget <b>${money(a.compute_budget_usd)}</b></span>
+                  <span>exp. revenue <b>${money(a.expected_revenue_usd)}</b></span>
+                  ${integ ? `<span>integrity <span class="cmp-int ${esc(integ)}">${esc(integ)}</span></span>` : ""}
+                  ${a.downgrade_reason ? `<span>downgraded <b>${esc(a.downgrade_reason)}</b></span>` : ""}
+                </div>
+              </div>`;
+            }).join("")
+          : `<div class="all-clear"><span class="ok">✓ no compute allocations</span> — no priced jobs running</div>`;
+
+        // Approvals
+        const pending = (data.approvals && data.approvals.pending) || [];
+        $("apcount").textContent = pending.length + " pending";
+        $("ap-body").innerHTML = pending.length
+          ? pending.map((p) => `
+              <div class="ap-card">
+                <div class="ap-top">
+                  <span class="ap-amt">${money(p.projected_usd)}</span>
+                  <span class="ap-level">${esc(p.level || "—")}</span>
+                </div>
+                <div class="ap-meta">
+                  <span>job <b>${esc(p.job_id)}</b></span>
+                  <span>center <b>${esc(p.cost_center_id)}</b></span>
+                  <span>tool <b>${esc(p.tool_name || "—")}</b></span>
+                  ${p.ref ? `<span>ref <b>${esc(p.ref)}</b></span>` : ""}
+                </div>
+                <div class="ap-actions">
+                  <button class="act approve" data-id="${esc(p.id)}" data-decision="approve">Approve</button>
+                  <button class="act reject"  data-id="${esc(p.id)}" data-decision="reject">Reject</button>
+                </div>
+              </div>`).join("")
+          : `<div class="all-clear"><span class="ok">✓ all clear</span> — no spend awaiting a human</div>`;
+
+        // Audit feed
+        const items = (data.audit && data.audit.items) || [];
+        $("audit").innerHTML = items.length
+          ? items.map((it) => `
+              <div class="feed-row">
+                <span class="feed-ts">${esc(hhmmss(it.ts))}</span>
+                <span class="feed-badge" style="background:${badge(it.event)}">${esc(it.event)}</span>
+                <span class="feed-text"><b>${esc(it.actor)}</b> ${esc(compact(it.payload))}</span>
+              </div>`).join("")
+          : `<div class="empty">No events yet</div>`;
+      }
+
+      function setSigned(el, n) {
+        el.textContent = signed(n);
+        el.classList.toggle("pos", Number(n) >= 0);
+        el.classList.toggle("neg", Number(n) < 0);
+      }
+
+      // ── LIVE / DEMO indicator (honest, sticky once LIVE) ──────────────────
+      let everLive = false;     // has /state ever responded OK?
+      let lastGood = null;      // last good live state (last-known-good)
+      let missStreak = 0;       // consecutive failures while everLive
+      const MISS_RECONNECT = 3; // misses before showing RECONNECTING
+
+      function setPill(kind) {   // 'live' | 'demo' | 'reconnecting'
+        $("livePill").className = "pill " + kind;
+        $("liveText").textContent = kind;
+      }
+
+      // ── Poll loop ───────────────────────────────────────────────────────────
+      async function poll() {
+        try {
+          const res = await fetch(STATE_URL, { cache: "no-store" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          everLive = true;
+          usingMock = false;
+          lastGood = data;
+          missStreak = 0;
+          setPill("live");
+          render(data);
+        } catch {
+          if (!everLive) {
+            // Cold start, no backend yet → honest DEMO + embedded mock.
+            usingMock = true;
+            setPill("demo");
+            render(mock);
+            return;
+          }
+          // Already been LIVE: stay sticky on last-known-good, never the mock.
+          missStreak++;
+          usingMock = false;
+          setPill(missStreak >= MISS_RECONNECT ? "reconnecting" : "live");
+          if (lastGood) render(lastGood);
+        }
+      }
+
+      // ── Approve / Reject (delegated) ──────────────────────────────────────
+      document.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-decision]");
+        if (!btn) return;
+        const id = btn.dataset.id;
+        const decision = btn.dataset.decision;
+
+        // disable both buttons on the card while deciding
+        btn.closest(".ap-card").querySelectorAll(".act").forEach((b) => (b.disabled = true));
+
+        if (usingMock) {
+          const p = mock.approvals.pending.find((x) => x.id === id);
+          mock.approvals.pending = mock.approvals.pending.filter((x) => x.id !== id);
+          mock.audit.items.unshift({
+            ts: new Date().toISOString(), actor: "human",
+            event: decision === "approve" ? "approved" : "rejected",
+            payload: { id, projected_usd: p ? p.projected_usd : undefined },
+          });
+          // recompute hero state from remaining pending holds
+          mock.eye_state = mock.approvals.pending.some((x) => x.level === "finance") ? "holding" : "watching";
+          render(mock);
+          return;
+        }
+
+        try {
+          await fetch(decideURL(id), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ decision }),
+          });
+        } catch { /* swallow — next poll reconciles */ }
+        poll(); // immediate re-poll per contract
+      });
+
+      // ── Boot ──────────────────────────────────────────────────────────────
+      render(mock);      // populated immediately, even before first fetch
+      usingMock = true;
+      setPill("demo");
+      poll();
+      setInterval(poll, POLL_MS);
+    </script>
+  </body>
+</html>

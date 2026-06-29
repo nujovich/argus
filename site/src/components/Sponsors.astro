@@ -1,0 +1,52 @@
+---
+const pillars = [
+  {
+    name: 'Stripe',
+    line: 'The wallet.',
+    body: 'Two-layer enforcement: in-process pre_tool_call hook + Stripe Issuing authorization webhook. A rogue agent doesn\'t get past the card network.',
+  },
+  {
+    name: 'NVIDIA',
+    line: 'The compute.',
+    body: 'Nemotron 3 Ultra allocated as the premium tier on margin-justified jobs; cheaper Nemotron / NIM on low-margin work. NemoClaw as the deployment target.',
+  },
+  {
+    name: 'Nous',
+    line: 'The fleet.',
+    body: 'Argus is a Hermes plugin. It reads hermes-telemetry as a read-only data dependency for per-session Nemotron pricing. Zero code changes upstream.',
+  },
+];
+---
+<section id="sponsors">
+  <div class="container">
+    <span class="eyebrow reveal">Earned, not decorative</span>
+    <h2 class="reveal" style="margin-top: 16px;">Each sponsor sits at the center of the value flow.</h2>
+
+    <div class="pillars" style="margin-top: 48px;">
+      {pillars.map((p) => (
+        <div class="pillar reveal">
+          <h3>{p.name}</h3>
+          <p class="mono" style="color: var(--fg); margin-top: 8px;">{p.line}</p>
+          <p style="margin-top: 16px;">{p.body}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .pillars {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .pillar {
+    padding: 28px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+  }
+  @media (max-width: 880px) {
+    .pillars { grid-template-columns: 1fr; }
+  }
+</style>

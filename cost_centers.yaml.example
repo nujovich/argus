@@ -1,0 +1,30 @@
+# Argus cost-center / budget config.
+# Copy to ~/.hermes/argus/cost_centers.yaml to override the built-in defaults.
+#
+# Routing tiers per cost center:
+#   projected_usd ≤ auto_approve_under_usd → auto-approve
+#   projected_usd ≤ manager_under_usd       → manager approval
+#   otherwise                                → finance approval
+#
+# Hard cap: if current_spent + projected_usd would exceed limit_usd, the
+# request is always routed to finance regardless of tier.
+
+cost_centers:
+  default:
+    label: "Default cost center"
+    limit_usd: 50.0
+    soft_threshold: 0.8        # warn at 80%
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0
+
+  api_calls:
+    label: "Pay-per-call APIs"
+    limit_usd: 25.0
+    auto_approve_under_usd: 0.5
+    manager_under_usd: 5.0
+
+  saas:
+    label: "SaaS provisioning"
+    limit_usd: 200.0
+    auto_approve_under_usd: 0.0   # no auto-approve — always at least manager
+    manager_under_usd: 50.0

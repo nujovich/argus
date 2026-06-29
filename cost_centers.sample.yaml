@@ -1,0 +1,56 @@
+# Argus cost-center / budget config — SAMPLE for the Ledger layer.
+#
+# Drop a copy at ~/.hermes/argus/cost_centers.yaml. db.seed_from_config()
+# upserts these idempotently into the cost_centers + budgets tables, and the
+# optional `jobs:` map (CLAUDE.md §9.3) seeds the jobs bridge table
+# (job_id → cost_center_id).
+#
+# Routing tiers per cost center (Policy reads these via db.budget_for):
+#   projected_usd <= auto_approve_under_usd -> auto-approve
+#   projected_usd <= manager_under_usd       -> manager approval
+#   otherwise                                -> finance approval
+# Hard cap: current_spent + projected_usd > limit_usd always routes to finance.
+
+cost_centers:
+  api_calls:
+    label: "Pay-per-call APIs"
+    limit_usd: 25.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 0.50
+    manager_under_usd: 5.0
+
+  saas:
+    label: "SaaS provisioning"
+    limit_usd: 200.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 0.0
+    manager_under_usd: 50.0
+
+  services:
+    label: "One-off services & NIMs"
+    limit_usd: 50.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0
+    # Phase 4.5 compute-tier policy (optional; cash-only when unset).
+    ultra_model: "nvidia/nemotron-3-ultra-550b-a55b"
+    base_model: "nvidia/nemotron-3-base-9b"
+    ultra_min_revenue_usd: 50.0
+    ultra_min_margin_usd: 20.0
+    reject_below_margin_usd: 0.0
+
+  default:
+    label: "Default"
+    limit_usd: 50.0
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0
+
+# Optional job -> cost_center map (CLAUDE.md §9.3). The agent normally declares
+# job_id -> cost_center at runtime via register_job(); this static map is the
+# config-seeded equivalent for known/recurring jobs. Either form works:
+#   job_id: cost_center_id          (shorthand)
+#   job_id: {cost_center_id: ...}   (extensible)
+jobs:
+  job-research-alpha: services
+  job-saas-provisioning: saas
+  job-bulk-api-sync: api_calls

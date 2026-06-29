@@ -1,0 +1,50 @@
+# Mermelada Studio cost-center calibration.
+# Drop this at ~/.hermes/argus/cost_centers.yaml. The mermelada_demo.py
+# driver expects these thresholds — if you change them substantially,
+# update the script's per-step amounts too.
+
+cost_centers:
+  # Pay-per-call image generation (fal, OpenAI images, etc.). Micro
+  # auto-approves; the $2 hero shot escalates to manager.
+  image_gen:
+    label: "Image generation APIs"
+    limit_usd: 50.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 0.50
+    manager_under_usd: 5.0
+
+  # SaaS provisioning (premium fonts, asset libraries, hosting). NO
+  # auto-approve — every SaaS spend escalates to at least manager.
+  # This is where the $40 → reject → $5 retry beat happens.
+  saas_dev_tools:
+    label: "SaaS dev tools & provisioning"
+    limit_usd: 200.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 0.0
+    manager_under_usd: 50.0
+
+  # Own renderer / compute. Centavos most of the time.
+  compute:
+    label: "Compute / rendering"
+    limit_usd: 10.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 5.0
+
+  # Marketing / ads. Effectively blocked: limit_usd=0 means any
+  # positive spend trips the hard-cap rule and routes to finance.
+  # The operator should REJECT this to demonstrate the out-of-category
+  # block beat. (Policy-level "denied categories" is FUTURE.md Tier 2.)
+  marketing:
+    label: "Marketing / ads (denied)"
+    limit_usd: 0.0
+    soft_threshold: 1.0
+    auto_approve_under_usd: 0.0
+    manager_under_usd: 0.0
+
+  # Default catch-all.
+  default:
+    label: "Default"
+    limit_usd: 50.0
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0

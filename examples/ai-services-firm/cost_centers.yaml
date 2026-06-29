@@ -1,0 +1,55 @@
+# AI Services Firm cost-center calibration (Phase 4.5).
+# Drop at ~/.hermes/argus/cost_centers.yaml.
+#
+# This config governs an autonomous AI services firm — a fleet of Hermes
+# agents selling intelligence-powered work (research, analysis,
+# generation). Each cost center has BOTH cash-side budget rules AND
+# compute-tier policy (Phase 4.5).
+
+cost_centers:
+
+  # Premium enterprise research jobs. Big budgets, high margins, justify
+  # Nemotron 3 Ultra. Junk research that pretends to be premium gets
+  # downgraded to base.
+  ai_research:
+    label: "AI Research Services"
+    limit_usd: 1000.0
+    soft_threshold: 0.8
+    # cash-side
+    auto_approve_under_usd: 5.0
+    manager_under_usd: 100.0
+    # compute-side (Phase 4.5)
+    ultra_model: "nvidia/nemotron-3-ultra-550b-a55b"
+    base_model: "nvidia/nemotron-3-base-9b"
+    ultra_min_revenue_usd: 100.0   # $100+ revenue needed for Ultra
+    ultra_min_margin_usd: 50.0     # $50+ expected margin needed for Ultra
+    reject_below_margin_usd: 0.0   # negative margin → reject
+
+  # Generation/short-form work. Tighter budgets, lower bar for Ultra
+  # but rejects clearly-negative-margin jobs.
+  ai_generation:
+    label: "AI Generation Services"
+    limit_usd: 200.0
+    soft_threshold: 0.8
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 25.0
+    ultra_model: "nvidia/nemotron-3-ultra-550b-a55b"
+    base_model: "nvidia/nemotron-3-base-9b"
+    ultra_min_revenue_usd: 30.0
+    ultra_min_margin_usd: 15.0
+    reject_below_margin_usd: -1.0
+
+  # External SaaS provisioning (databases, tools). Cash-side only;
+  # no compute tier needed.
+  saas_dev_tools:
+    label: "SaaS Provisioning"
+    limit_usd: 500.0
+    auto_approve_under_usd: 0.0
+    manager_under_usd: 100.0
+
+  # Out-of-policy default.
+  default:
+    label: "Default"
+    limit_usd: 50.0
+    auto_approve_under_usd: 1.0
+    manager_under_usd: 10.0
