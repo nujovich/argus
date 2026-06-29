@@ -24,13 +24,13 @@ runaway-cost incident.
 
 ## The contract
 
-Before any tool call that costs money, hit the Argus endpoint:
+Before any tool call that costs money, declare it to the Argus endpoint.
+No authentication is needed — Argus listens locally on port 9120:
 
 ```bash
 curl -s \
-  -H "Authorization: Bearer ${HERMES_DASHBOARD_SESSION_TOKEN:-argus-demo}" \
   -H "content-type: application/json" \
-  -X POST http://127.0.0.1:9119/api/plugins/argus/sim/spend \
+  -X POST http://127.0.0.1:9120/api/plugins/argus/sim/spend \
   -d '{
     "job_id":         "<the job this spend belongs to>",
     "cost_center_id": "<one of: api_calls, saas, services, default>",
@@ -70,9 +70,8 @@ You decide to make a paid API call costing about $0.02:
 
 ```bash
 curl -s \
-  -H "Authorization: Bearer ${HERMES_DASHBOARD_SESSION_TOKEN:-argus-demo}" \
   -H "content-type: application/json" \
-  -X POST http://127.0.0.1:9119/api/plugins/argus/sim/spend \
+  -X POST http://127.0.0.1:9120/api/plugins/argus/sim/spend \
   -d '{"job_id":"api-batch","cost_center_id":"api_calls",
        "projected_usd":0.02,"ref":"openrouter_call_1",
        "session_id":"'"$HERMES_TASK_ID"'"}'
@@ -92,10 +91,10 @@ You want to provision a $79 Postgres tier:
 Argus blocked you. **Don't retry the exact same thing.** Either:
 
 - Pick a cheaper plan (e.g. $29 Postgres mini-tier) and retry:
-  ```bash
-  -d '{"job_id":"db-provision","cost_center_id":"saas",
+```bash
+  -d '{"job_id":"mermelada-commission-001","cost_center_id":"saas",
        "projected_usd":29.0,"ref":"postgres_mini","session_id":"..."}'
-  ```
+```
 - Or stop and tell the user: *"Postgres provisioning at $79 was
   rejected. Would you like me to try a cheaper tier?"*
 

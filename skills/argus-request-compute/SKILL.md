@@ -1,134 +1,98 @@
 ---
 name: argus-request-compute
-description: |
-  REQUIRED before starting any LLM-heavy job. Declares (expected_revenue,
-  projected_burn) so Argus can assign a Nemotron tier — Ultra for
-  high-margin work, Base for thin-margin work, REJECT for negative-margin
-  jobs. The response tells you which model to use for this job.
-trigger: |
-  Call this skill BEFORE running an LLM-heavy operation (deep research,
-  multi-turn generation, long reasoning chains). Argus allocates compute
-  as capital: premium jobs get Ultra, low-margin jobs get downgraded.
+description: >
+  Use ANTES de elegir un modelo de inferencia para un job con valor económico.
+  Declarás el revenue esperado y el burn proyectado; Argus decide el tier de
+  compute (ULTRA / BASE / REJECT) y te devuelve el modelo permitido + un auth
+  token que DEBÉS reenviar en tus llamadas a Nemotron. No elijas modelo de
+  memoria: pedí el tier primero y usá exactamente el que Argus asigne.
 ---
 
-# Argus Request Compute
+# argus-request-compute
 
-## Why this exists
+Antes de correr un job que produce ingreso, declarás su economía a Argus y este
+decide qué modelo de Nemotron podés usar según el margen. Evita quemar un modelo
+caro en un job de bajo margen (o negativo). El agente NO elige el modelo: Argus
+lo asigna.
 
-You (the agent) burn money every time you call an LLM. The customer is
-paying you a fixed price; your margin is whatever's left after compute.
-Argus is the **economic OS** of this AI factory. Before you spin up a
-big inference job, you declare what you expect to earn and what you
-expect to burn. Argus tells you which Nemotron tier you're authorized
-to run on:
+## Cuándo usarla
+- El job tiene un `expected_revenue_usd` conocido o estimable.
+- Vas a elegir entre un modelo premium (ultra) y uno base.
+- SIEMPRE antes de la inferencia, nunca después.
 
-- **Ultra** — `nvidia/nemotron-3-ultra-550b-a55b`, premium, expensive.
-  Justified only when revenue × margin is high enough.
-- **Base** — a cheaper Nemotron tier. Argus defaults here for
-  thin-margin work.
-- **Reject** — if Argus computes negative margin, the job is killed
-  before it burns a dollar.
+## Cómo pedir el tier
 
-## The contract
-
-Before any expensive inference, hit the Argus compute endpoint:
+Hacé exactamente este POST (copialo, no lo armes de memoria):
 
 ```bash
-curl -s \
-  -H "Authorization: Bearer ${HERMES_DASHBOARD_SESSION_TOKEN:-argus-demo}" \
-  -H "content-type: application/json" \
-  -X POST http://127.0.0.1:9119/api/plugins/argus/sim/compute \
+curl -sS -X POST http://localhost:9120/api/plugins/argus/sim/compute \
+  -H 'Content-Type: application/json' \
   -d '{
-    "job_id":               "<the job this work belongs to>",
-    "cost_center_id":       "<one of: ai_research, ai_generation, default>",
-    "expected_revenue_usd": <what you expect to earn from this job>,
-    "projected_burn_usd":   <what you expect to burn on Nemotron tokens>,
-    "ref":                  "<a short human-readable label>",
-    "session_id":           "<your task_id / Hermes session id>"
+    "job_id": "<id-del-job>",
+    "cost_center_id": "default",
+    "expected_revenue_usd": <revenue>,
+    "projected_burn_usd": <burn-proyectado>
   }'
 ```
 
-Argus responds with:
+## Qué te devuelve
 
-| Response (`result.action`) | What it means | What you do |
-|---|---|---|
-| `allow` with `tier: "ultra"` | High-margin job → Ultra approved | Run inference on `result.model` (Nemotron 3 Ultra), echo `result.auth_token` in `metadata.argus_auth_token` |
-| `allow` with `tier: "base"` | Margin too thin for Ultra → Base assigned | Run on `result.model` (cheaper Nemotron), same token convention |
-| `block` with `verdict: "TIER_REJECT"` | Argus computes negative margin → job killed | Don't run. Report back: "margin would be negative, the job is uneconomic." |
-| `block` with `compute_*` reason | Monthly cap or other policy block | Self-correct (lower projected burn) or escalate |
-
-## Example — high-margin enterprise research
-
-```bash
-curl -s -H "..." -X POST http://127.0.0.1:9119/api/plugins/argus/sim/compute \
-  -d '{
-    "job_id":"research-enterprise-001",
-    "cost_center_id":"ai_research",
-    "expected_revenue_usd":200,
-    "projected_burn_usd":15,
-    "ref":"deep_competitor_analysis"
-  }'
-```
-
-Response (abbreviated):
+En ALLOW (tier ultra o base):
 
 ```json
-{ "result": {
+{
+  "result": {
     "action": "allow",
-    "verdict": "TIER_ULTRA",
     "tier": "ultra",
     "model": "nvidia/nemotron-3-ultra-550b-a55b",
     "compute_budget_usd": 15.0,
     "expected_margin_usd": 185.0,
-    "auth_token": "abc123…"
-} }
+    "auth_token": "<token>",
+    "expires_in": 60,
+    "allocation_id": 1
+  }
+}
 ```
 
-You now run your research on `nvidia/nemotron-3-ultra-550b-a55b` and
-deliver to the customer.
+En REJECT (margen insuficiente):
 
-## Example — low-margin generation, downgraded
+```json
+{
+  "result": {
+    "action": "block",
+    "message": "Argus rejected compute: negative_margin ...",
+    "verdict": "TIER_REJECT",
+    "expected_margin_usd": -2.0
+  }
+}
+```
+
+## Qué hacer con la respuesta
+
+- `action: "allow"` -> usá EXACTAMENTE el `model` que vino en la respuesta. NO uses
+  otro modelo.
+- **Guardá el `auth_token`** y reenvialo en la metadata de tu llamada a Nemotron,
+  en el campo `metadata.argus_auth_token`. Sin el token, la capa de integridad de
+  compute marca la corrida como violación al cotejarla contra telemetry.
+- El token vence en `expires_in` segundos (60). Pedí el tier justo antes de
+  inferir, no con anticipación.
+- `action: "block"` -> NO corras el job. El margen no lo justifica. Reportá el
+  `message`.
+
+## Ejemplo
+
+Job de comisión, ingreso $200, burn proyectado $15:
 
 ```bash
-curl -s -H "..." -X POST http://127.0.0.1:9119/api/plugins/argus/sim/compute \
+curl -sS -X POST http://localhost:9120/api/plugins/argus/sim/compute \
+  -H 'Content-Type: application/json' \
   -d '{
-    "job_id":"gen-tweet-042",
-    "cost_center_id":"ai_generation",
-    "expected_revenue_usd":3,
-    "projected_burn_usd":5,
-    "ref":"viral_tweet_draft"
+    "job_id": "mermelada-commission-001",
+    "cost_center_id": "default",
+    "expected_revenue_usd": 200.0,
+    "projected_burn_usd": 15.0
   }'
 ```
 
-Response:
-
-```json
-{ "result": {
-    "action": "block",
-    "verdict": "TIER_REJECT",
-    "reason": "negative_margin: expected_margin -2.00 < threshold 0.00"
-} }
-```
-
-Or if the policy allows base for a barely-positive job:
-
-```json
-{ "result": {
-    "action": "allow",
-    "verdict": "TIER_BASE",
-    "tier": "base",
-    "model": "nvidia/nemotron-3-base-9b",
-    "compute_budget_usd": 0.5,
-    "expected_margin_usd": 0.5
-} }
-```
-
-Either way: **don't burn Ultra inference on a $3 job**.
-
-## Why this is non-negotiable
-
-You're not running on a free tier. Every Nemotron token costs your
-employer real dollars. Argus is the layer that makes the
-economics of agentic work visible — and survivable — at scale. Use
-this skill before every LLM-heavy job. The audit trail records your
-choice; future humans (and CFOs) will read it.
+-> `allow`, tier `ultra`, modelo `nvidia/nemotron-3-ultra-550b-a55b`, token de 60s.
+Usás ese modelo y reenviás el token en `metadata.argus_auth_token`.
