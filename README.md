@@ -1,8 +1,11 @@
-# Argus
+<p align="center">
+  <img src="docs/argus-mark.svg" alt="Argus eye mark — one of the hundred, holding a spend for approval" width="160">
+</p>
 
-> **Where cash meets compute, capital becomes margin.**
->
-> Agents spend. Argus watches. You approve.
+<h1 align="center">Argus</h1>
+
+<p align="center"><strong>Where cash meets compute, capital becomes margin.</strong><br>
+<em>Agents spend. Argus watches. You approve.</em></p>
 
 Argus is a financial control plane for autonomous agents. A Hermes plugin
 that sits **between the agent and its wallet** and gates every dollar
@@ -10,6 +13,21 @@ before it moves — across two fungible capitals at once: **cash** (Stripe)
 and **compute** (NVIDIA Nemotron).
 
 ![Argus dashboard — cash + compute tiers, live P&L, approval queue](docs/pnl-final-real.webp)
+
+## The mark
+
+One eye, holding open. It's the avatar the bot wears in the human-in-the-
+loop chat — the *holding* state, when a spend is paused waiting on you.
+One of the hundred eyes of Argus Panoptes, in code.
+
+| Token | Value | Use |
+|---|---|---|
+| `--bg` | `#070A0E` | canvas, dashboard, pupil |
+| `--amber` | `#F5A524` | cash, the gate, the iris |
+| `--amber-hi` | `#FFBA47` | iris highlight, hover, live tick |
+| `--amber-lo` | `#C77F12` | iris rim, striations, audit lines |
+| `--green` | `#76E89A` | compute, margin positive, approve |
+| `--red` | `#E26A6A` | reject, negative margin, danger |
 
 ---
 
