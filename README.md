@@ -12,7 +12,7 @@ that sits **between the agent and its wallet** and gates every dollar
 before it moves — across two fungible capitals at once: **cash** (Stripe)
 and **compute** (NVIDIA Nemotron).
 
-![Argus dashboard — cash + compute tiers, live P&L, approval queue](docs/pnl-final-real.webp)
+![Argus standalone dashboard — Where cash meets compute, capital becomes margin. Treasury, fleet total, per-job P&L.](docs/dashboard-overview.png)
 
 ## The mark
 
@@ -153,6 +153,24 @@ remaining piece.
 pip install -r requirements-dev.txt
 python3 -m pytest
 ```
+
+## The standalone dashboard
+
+`standalone.py` boots the SPA and the API on a single origin (`:9119`),
+no Hermes required. The same surfaces the plugin renders inside
+Hermes — Treasury, Fleet total, Per-job P&L, Tier allocations, Pending
+approvals, Live event stream — served as one page.
+
+![Per job P&L · Compute tier allocations · HITL pending approvals](docs/dashboard-perjob.png)
+
+```bash
+pip install fastapi pydantic anyio pyyaml uvicorn
+python3 standalone.py        # → http://127.0.0.1:9119
+```
+
+The full long-form capture (hero, treasury, fleet total, per-job,
+allocations, approvals, audit stream — all in one shot) lives at
+[`docs/dashboard-full.png`](docs/dashboard-full.png).
 
 ## Demo without an agent
 
