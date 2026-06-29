@@ -882,8 +882,8 @@ async def run_ai_services_firm_demo() -> dict:
 async def demo_reset() -> dict:
     """Wipe the demo state so the dashboard is clean for the next take.
 
-    Deletes everything from ledger, approval_requests, audit_trail, and
-    auth_tokens. Re-inserts the Nemotron session anchor row if telemetry
+    Deletes everything from ledger, approval_requests, audit_trail, auth_tokens,
+    and compute_allocations. Re-inserts the Nemotron session anchor row if telemetry
     has at least one priced session, so the LLM cost column lights up
     immediately on the next /pnl call."""
     conn = db._get_conn()
@@ -891,6 +891,7 @@ async def demo_reset() -> dict:
     conn.execute("DELETE FROM approval_requests")
     conn.execute("DELETE FROM audit_trail")
     conn.execute("DELETE FROM auth_tokens")
+    conn.execute("DELETE FROM compute_allocations")
 
     # Try to re-anchor a recent priced telemetry session so the LLM
     # column isn't $0.00 on the next run.

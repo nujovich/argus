@@ -60,6 +60,9 @@ def build_app() -> FastAPI:
             token
             and request.method != "OPTIONS"
             and request.url.path.startswith(API_PREFIX)
+            # /sim/spend is the agent->Argus channel (localhost-only);
+            # exempt it from the dashboard session-token gate.
+            and not request.url.path.endswith(("/sim/spend", "/sim/compute"))
         ):
             if request.headers.get("authorization", "") != f"Bearer {token}":
                 return JSONResponse({"detail": "unauthorized"}, status_code=401)
