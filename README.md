@@ -83,7 +83,8 @@ cash_tiers:
 
 > *Argus decides which model a job deserves — by margin.*
 
-Compute is money. `hermes-telemetry` already prices Nemotron sessions in
+Compute is money. [`hermes-telemetry`](https://github.com/nujovich/hermes-telemetry)
+— a custom Hermes plugin built for this — already prices Nemotron sessions in
 dollars; Argus reads that ledger directly and routes each job to the
 model its margin earns:
 
@@ -108,7 +109,7 @@ rejected — and the per-job P&L updates live on the dashboard.
 | 02 | **NVIDIA Nemotron via NIM** | Compute capital — priced per session by `hermes-telemetry`. |
 | 03 | **Stripe** | Cash capital — revenue intake via signature-verified webhooks. |
 | 04 | **In-process enforcement** | The hook fails **closed** — validated against real Stripe Skills. |
-| 05 | **hermes-telemetry (OSS)** | Read-only dependency for in-path cost metering and P&L. |
+| 05 | **[hermes-telemetry](https://github.com/nujovich/hermes-telemetry) (OSS)** | Read-only dependency for in-path cost metering and P&L. |
 | 06 | **Fully config-driven** | YAML cost-centers + tiers — no hardcode. |
 
 ## Architecture — six layers, Ledger at the center
@@ -247,6 +248,7 @@ Full post-deadline plan in [`FUTURE.md`](./FUTURE.md).
 - [`DEMO.md`](./DEMO.md) — reproducible demo recipe.
 - [`SUBMISSION.md`](./SUBMISSION.md) — hackathon writeup, beat by beat.
 - [`FUTURE.md`](./FUTURE.md) — what's explicitly out of scope for v1.
+- [`hermes-telemetry`](https://github.com/nujovich/hermes-telemetry) — the read-only compute-metering plugin Argus builds on.
 
 ---
 

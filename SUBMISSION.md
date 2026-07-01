@@ -154,7 +154,8 @@ judge sees live at the open.
 
 ## Engine 02 — Compute tiering: margin chooses the model
 
-Compute is money. `hermes-telemetry` already prices Nemotron sessions
+Compute is money. [`hermes-telemetry`](https://github.com/nujovich/hermes-telemetry)
+— a custom Hermes plugin built for this — already prices Nemotron sessions
 in dollars; Argus reads that ledger directly and routes each job to
 the model its margin earns:
 
@@ -284,7 +285,7 @@ wait inside the hook itself. **Validated.** No Hermes core changes.
 | 02 | **NVIDIA Nemotron via NIM** | Compute capital — priced per session |
 | 03 | **Stripe** | Cash capital — signature-verified webhooks |
 | 04 | **In-process enforcement** | Validated against real Stripe Skills, fails closed |
-| 05 | **`hermes-telemetry` (OSS)** | Read-only — in-path cost metering + P&L |
+| 05 | **[`hermes-telemetry`](https://github.com/nujovich/hermes-telemetry) (OSS)** | Read-only — in-path cost metering + P&L |
 | 06 | **Fully config-driven** | YAML cost centers + tiers, no hardcode |
 
 ---
@@ -406,13 +407,14 @@ sufficient set of pipes around that fact.
 - **Demo recipe:** [`DEMO.md`](./DEMO.md)
 - **Demo driver:** [`scripts/demo.py`](./scripts/demo.py)
 - **Phase 5 roadmap:** [`FUTURE.md`](./FUTURE.md)
+- **Compute-metering plugin:** [`hermes-telemetry`](https://github.com/nujovich/hermes-telemetry)
 
 ---
 
 ## Credits
 
 - **Hermes Agent** by Nous Research.
-- **`hermes-telemetry`** by @nujovich (read-only dependency).
+- **[`hermes-telemetry`](https://github.com/nujovich/hermes-telemetry)** by @nujovich — custom Hermes plugin, read-only dependency for compute metering.
 - **Stripe Skills for Hermes**.
 - **NVIDIA Nemotron 3 Ultra** via NIM for inference; **NemoClaw** as
   the safe-execution target.
